@@ -3,29 +3,26 @@
 # MSIX package for Microsoft Store submission, using the "Desktop Bridge"
 # pattern — hupi-code.exe runs unmodified, no UWP rewrite needed.
 #
-# This produces a *structurally valid* .msix — it does NOT make it
-# submittable on its own. Two things only a human can provide first:
-#   1. MSIX_IDENTITY_NAME / MSIX_PUBLISHER — only exist once "HUPI Code"
-#      is reserved in Microsoft Partner Center (partner.microsoft.com);
-#      Partner Center shows the exact required values on the app's
-#      Identity page after reservation. Without real values here, the
-#      package builds fine but Partner Center will reject it on
-#      submission (identity mismatch).
-#   2. The package this produces is unsigned. For local sideload testing
-#      you'd need a self-signed test certificate; for the real Store
-#      listing, Microsoft signs it during certification — you don't
-#      need your own cert for that path (see docs/MICROSOFT_STORE.md).
+# "HUPI Code" is reserved in Microsoft Partner Center as of 2026-09-19 —
+# MSIX_IDENTITY_NAME/MSIX_PUBLISHER below default to the real values from
+# that reservation's Identity page (these are public identifiers that
+# ship inside the manifest and appear in the Store listing, not secrets).
+# Override via env var only if the reservation is ever redone.
+#
+# The package this produces is still unsigned. For local sideload
+# testing you'd need a self-signed test certificate; for the real Store
+# listing, Microsoft signs it during certification — you don't need your
+# own cert for that path (see docs/MICROSOFT_STORE.md).
 #
 # Usage (Windows only — makeappx.exe is part of the Windows SDK, already
 # on GitHub's windows-latest runners):
-#   MSIX_IDENTITY_NAME=... MSIX_PUBLISHER=... \
-#     ./build/package-msix.sh /path/to/VSCode-win32-x64 ./out/hupi-code.msix
+#   ./build/package-msix.sh /path/to/VSCode-win32-x64 ./out/hupi-code.msix
 set -euo pipefail
 
 APP_DIR="${1:?usage: package-msix.sh <path to VSCode-win32-x64> <output .msix path>}"
 OUT_MSIX="${2:?usage: package-msix.sh <path to VSCode-win32-x64> <output .msix path>}"
-IDENTITY_NAME="${MSIX_IDENTITY_NAME:?MSIX_IDENTITY_NAME must be set — see Partner Center's app Identity page}"
-PUBLISHER="${MSIX_PUBLISHER:?MSIX_PUBLISHER must be set — see Partner Center's app Identity page}"
+IDENTITY_NAME="${MSIX_IDENTITY_NAME:-HUPICode.HUPICode}"
+PUBLISHER="${MSIX_PUBLISHER:-CN=7A8FE7AC-7EFD-475E-8E35-35E59012B58B}"
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # MSIX requires a strict four-part Major.Minor.Build.Revision version.

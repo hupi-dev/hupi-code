@@ -1,11 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
   Template, not a real manifest — @@IDENTITY_NAME@@ and @@PUBLISHER@@ are
-  filled in by build/package-msix.sh from MSIX_IDENTITY_NAME/MSIX_PUBLISHER
-  env vars, not committed here. Both values only exist once the app name
-  is reserved in Microsoft Partner Center (partner.microsoft.com) — Partner
-  Center shows them on the app's Identity page after reservation. See
-  docs/MICROSOFT_STORE.md for the full submission process this fits into.
+  filled in by build/package-msix.sh, which now defaults them to the
+  real values from "HUPI Code"'s Microsoft Partner Center reservation
+  (partner.microsoft.com) — public identifiers, not secrets, so they're
+  fine to default in a committed script; MSIX_IDENTITY_NAME/
+  MSIX_PUBLISHER env vars still override if the reservation ever
+  changes. See docs/MICROSOFT_STORE.md for the full submission process
+  this fits into.
 
   This uses the "Desktop Bridge" pattern (EntryPoint="Windows.
   FullTrustApplication" + the runFullTrust capability below) — the
@@ -26,7 +28,7 @@
 
   <Properties>
     <DisplayName>HUPI Code</DisplayName>
-    <PublisherDisplayName>HUPI</PublisherDisplayName>
+    <PublisherDisplayName>HUPI Code</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
 
