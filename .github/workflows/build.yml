@@ -59,3 +59,96 @@ jobs:
           name: hupi-code-linux-x64
           path: out/VSCode-linux-x64
           retention-days: 7
+
+  # Windows and macOS builds are unsigned — real code signing needs
+  # credentials this repo doesn't have wired in yet (a Windows
+  # certificate via Azure Trusted Signing, an Apple Developer ID +
+  # notarization). Unsigned builds still run fine; the OS will show an
+  # "unknown publisher"-style warning on first launch until that's set
+  # up. See docs/UPSTREAM_UPGRADES.md and the main README's Phase 4 note.
+  #
+  # Both jobs are new and unlike linux-x64 (hardened through several real
+  # build failures caught by actually running it) haven't been validated
+  # against a real build yet — build.sh/smoke-test.sh's win32/darwin
+  # paths were written by reasoning through microsoft/vscode's own build
+  # source, not by running them. Treat the first real failures here as
+  # expected, not a sign the whole approach is wrong.
+  windows-x64:
+    runs-on: windows-latest
+    steps:
+      - name: Check out hupi-code
+        uses: actions/checkout@v4
+        with:
+          path: hupi-code
+
+      - name: Check out hupi (for vscode-extension)
+        uses: actions/checkout@v4
+        with:
+          repository: hupi-dev/hupi
+          ref: main
+          path: hupi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Matches UPSTREAM_TAG's own .nvmrc pin (see docs/UPSTREAM_UPGRADES.md's
+          # "known-bad upstream release" note for why it's pinned at all) —
+          # nvm-the-Unix-tool doesn't run on native Windows, so this is the
+          # equivalent of the Linux job's nvm install/use for this OS.
+          node-version: '24.18.0'
+
+      - name: Build HUPI Code
+        shell: bash
+        working-directory: hupi-code
+        env:
+          HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+        run: OUT_DIR="${{ github.workspace }}/out" ./build/build.sh
+
+      - name: Smoke test
+        shell: bash
+        working-directory: hupi-code
+        run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-win32-x64"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-win32-x64
+          path: out/VSCode-win32-x64
+          retention-days: 7
+
+  macos-arm64:
+    runs-on: macos-latest
+    steps:
+      - name: Check out hupi-code
+        uses: actions/checkout@v4
+        with:
+          path: hupi-code
+
+      - name: Check out hupi (for vscode-extension)
+        uses: actions/checkout@v4
+        with:
+          repository: hupi-dev/hupi
+          ref: main
+          path: hupi
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+
+      - name: Build HUPI Code
+        working-directory: hupi-code
+        env:
+          HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+        run: OUT_DIR="${{ github.workspace }}/out" ./build/build.sh
+
+      - name: Smoke test
+        working-directory: hupi-code
+        run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-darwin-arm64"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-darwin-arm64
+          path: out/VSCode-darwin-arm64
+          retention-days: 7

@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Headless smoke test for a build produced by build.sh: confirms the app
 # launches without crashing and that the bundled HUPI extension is
-# actually loaded — not just present on disk.
+# actually loaded — not just present on disk. Works against a build for
+# any of the three platforms build.sh can produce.
 #
 # Verifying "is the extension loaded" turned out to need more than
 # grepping startup logs: hupi-vscode's activationEvents is deliberately
@@ -18,14 +19,40 @@
 # That's exactly what this script does, then asserts hupi.hupi-vscode is
 # in the result.
 #
-# Usage: ./build/smoke-test.sh /path/to/VSCode-linux-x64
+# Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
-APP_DIR="${1:?usage: smoke-test.sh <path to VSCode-linux-x64>}"
+APP_DIR="${1:?usage: smoke-test.sh <path to VSCode-<platform>-<arch>>}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-PROBE_DIR="$APP_DIR/resources/app/extensions/zzz-smoke-test-probe"
+# The packaged binary's location/name differs per OS — see electron.ts's
+# linuxExecutableName/darwinExecutable (both set from product.json's
+# applicationName/nameShort) for where these come from. Only the Linux
+# path has been confirmed against a real build; the win32/darwin paths
+# are inferred from microsoft/vscode's own build source and haven't run
+# against a real build yet — expect the first real CI run on those two
+# to need a fix here if the inference is off.
+case "$(uname -s)" in
+  Linux*)
+    APP_BIN="$APP_DIR/hupi-code"
+    RESOURCES_DIR="$APP_DIR/resources/app"
+    ;;
+  Darwin*)
+    APP_BIN="$APP_DIR/HUPI Code.app/Contents/MacOS/HUPI Code"
+    RESOURCES_DIR="$APP_DIR/HUPI Code.app/Contents/Resources/app"
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    APP_BIN="$APP_DIR/hupi-code.exe"
+    RESOURCES_DIR="$APP_DIR/resources/app"
+    ;;
+  *)
+    echo "unsupported OS: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+
+PROBE_DIR="$RESOURCES_DIR/extensions/zzz-smoke-test-probe"
 RESULT_FILE="$WORKDIR/probe-result.txt"
 
 mkdir -p "$PROBE_DIR"
@@ -52,11 +79,24 @@ EOF
 cleanup_probe() { rm -rf "$PROBE_DIR"; }
 trap 'cleanup_probe; rm -rf "$WORKDIR"' EXIT
 
-echo "==> launching headlessly (xvfb) to confirm it starts and loads the HUPI extension"
-timeout 30 xvfb-run -a "$APP_DIR/hupi-code" \
-  --no-sandbox --disable-gpu \
-  --user-data-dir="$WORKDIR/user-data" \
-  > "$WORKDIR/run.log" 2>&1 || true
+echo "==> launching to confirm it starts and loads the HUPI extension"
+# Linux CI runners have no display at all, hence xvfb; Windows/macOS
+# GitHub-hosted runners run as a real logged-in desktop session already,
+# so no virtual-display wrapper is needed (or available — xvfb-run/
+# `timeout` are both Linux/GNU-specific) on those two. The launch just
+# runs the whole app and waits for onStartupFinished, so something has to
+# kill it afterward regardless of OS — a portable background+sleep+kill
+# replaces `timeout` for that.
+LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$WORKDIR/user-data")
+case "$(uname -s)" in
+  Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}") ;;
+esac
+
+"${LAUNCH[@]}" > "$WORKDIR/run.log" 2>&1 &
+APP_PID=$!
+sleep 30
+kill "$APP_PID" 2>/dev/null || true
+wait "$APP_PID" 2>/dev/null || true
 
 if [[ ! -f "$RESULT_FILE" ]]; then
   echo "FAIL: probe never activated — app likely failed to start. Log:"

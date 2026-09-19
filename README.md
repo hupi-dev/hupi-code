@@ -32,7 +32,31 @@ panels) is reachable that way, without touching upstream source, and
 that's still the preferred direction before reaching for another core
 patch.
 
-Linux only for now — see [docs/BUILD.md](docs/BUILD.md).
+Linux, Windows, and macOS (arm64) all build in CI now — see
+[docs/BUILD.md](docs/BUILD.md). Windows/macOS builds are **unsigned**:
+real code signing needs credentials this repo doesn't have wired in yet
+(a Windows certificate via Azure Trusted Signing, an Apple Developer ID +
+notarization) — see the Phase 4 note below. An unsigned build still runs
+fine; the OS just shows an "unknown publisher"-style warning on first
+launch until signing is set up.
+
+## Distribution status (Phase 4)
+
+Every push builds and smoke-tests all three platforms in CI, uploaded as
+build artifacts — there's no download page or release process yet, and
+Windows/macOS builds are unsigned (see above). Real signing is blocked
+on external credentials only a human can obtain: a Windows code-signing
+certificate (in progress via Azure Trusted Signing — needs a validated
+Trusted Signing Account, a Public Trust certificate profile, and an
+Azure AD app registration granted the *Trusted Signing Certificate
+Profile Signer* role, wired into CI via Microsoft's
+[`trusted-signing-action`](https://github.com/Azure/trusted-signing-action))
+and an Apple Developer ID + notarization credentials for macOS. Auto-
+update and an installer (Inno Setup on Windows, a signed DMG on macOS)
+are also still open — `product-overlay.json`'s `win32AppId`/
+`win32x64AppId`/etc. are real, valid GUIDs now (fixed from Phase 1's
+placeholders) so that work isn't blocked when it starts, but nothing
+uses them yet since only the raw unsigned binary folder is produced today.
 
 ## Why this repo is small
 
@@ -55,7 +79,7 @@ UPSTREAM_TAG          pinned microsoft/vscode git tag
 patches/               ordered *.patch files applied to the pinned tag
 product-overlay.json   branding/identity/gallery overrides merged onto
                        the pinned tag's own product.json at build time
-resources/             HUPI icon set
+resources/             HUPI icon set (linux/, win32/code.ico, darwin/code.icns)
 build/
   build.sh              clone -> patch -> overlay -> build
   smoke-test.sh         headless launch + "did the extension load" check

@@ -6,7 +6,13 @@
 # hupi-native extension as a true built-in (can't be disabled/uninstalled
 # from the UI, same folder-under-extensions/ convention every other
 # built-in extension — git, npm, typescript-language-features — already
-# uses), then runs VS Code's own build for linux-x64.
+# uses), then runs VS Code's own build for the *current* OS/arch (Linux,
+# Windows, and macOS all run this same script — see BUILD_TARGETS in
+# microsoft/vscode's build/gulpfile.vscode.ts for why cross-compiling to a
+# different OS than the one gulp runs on isn't the supported path: the
+# generic `vscode`/`vscode-min` gulp tasks are only registered when
+# process.platform/arch match the target, so each platform builds on its
+# own OS, same as upstream's own CI does with per-OS build agents).
 #
 # This is the VSCodium model on purpose: this repo never vendors VS
 # Code's own source. Bumping upstream is "edit UPSTREAM_TAG, re-run this
@@ -16,17 +22,31 @@
 # Usage:
 #   OUT_DIR=/path/to/output ./build/build.sh
 #
-# Requires (verified live, not just documented): nvm (to install the
-# exact Node version the pinned tag's .nvmrc demands — VS Code's own
-# preinstall check hard-fails on anything older, even a lower patch
-# version of the same major), and Linux build/runtime deps —
-# pkg-config libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 rpm
-# bubblewrap socat libsecret-1-dev libx11-dev libasound2 libnss3
-# libatk1.0-0 libatk-bridge2.0-0 libxss1 xvfb (build deps from VS Code's
-# own CI, azure-pipelines/linux/*.yml; the last several are Electron's
-# own runtime deps for actually launching on a bare Linux box, not
-# documented anywhere obvious — found by running the built binary and
-# fixing missing-library errors one at a time).
+# Requires (verified live, not just documented):
+# - Linux: nvm (to install the exact Node version the pinned tag's
+#   .nvmrc demands — VS Code's own preinstall check hard-fails on
+#   anything older, even a lower patch version of the same major), and
+#   these build/runtime deps: pkg-config libgtk-3-0 libxkbfile-dev
+#   libkrb5-dev libgbm1 rpm bubblewrap socat libsecret-1-dev libx11-dev
+#   libasound2 libnss3 libatk1.0-0 libatk-bridge2.0-0 libxss1 xvfb
+#   (build deps from VS Code's own CI, azure-pipelines/linux/*.yml; the
+#   last several are Electron's own runtime deps for actually launching
+#   on a bare Linux box, not documented anywhere obvious — found by
+#   running the built binary and fixing missing-library errors one at a
+#   time).
+# - Windows/macOS: the right Node version already on PATH (nvm-the-
+#   Unix-tool doesn't run on native Windows; GitHub's windows-latest/
+#   macos-latest runners plus an explicit actions/setup-node step cover
+#   this — see .github/workflows/build.yml) and each OS's own native
+#   toolchain for node-gyp (Visual Studio Build Tools + Python on
+#   Windows, Xcode Command Line Tools on macOS) — both already present
+#   on GitHub-hosted runners, nothing extra to install there.
+# - Not yet exercised outside CI's own hosted runners: this script's
+#   Windows/macOS path is new and, unlike the Linux path (hardened
+#   through several real build failures caught by actually running it
+#   locally), has only been reasoned through against microsoft/vscode's
+#   build source, not run end-to-end on those OSes yet — expect the
+#   first real CI runs there to surface something.
 #
 # IMPORTANT: this must run from a directory that allows executing
 # binaries. Native module postinstall scripts (node-gyp-build and
@@ -34,6 +54,29 @@
 # clear top-level error — if OUT_DIR or the scratch clone end up under a
 # noexec mount, resolve that before debugging anything else.
 set -euo pipefail
+
+case "$(uname -s)" in
+  Linux*) PLATFORM=linux ;;
+  Darwin*) PLATFORM=darwin ;;
+  MINGW*|MSYS*|CYGWIN*) PLATFORM=win32 ;;
+  *)
+    echo "unsupported OS: $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+case "$(uname -m)" in
+  x86_64|amd64) ARCH=x64 ;;
+  arm64|aarch64) ARCH=arm64 ;;
+  *)
+    echo "unsupported architecture: $(uname -m)" >&2
+    exit 1
+    ;;
+esac
+# Matches microsoft/vscode's own BUILD_TARGETS naming exactly
+# (build/gulpfile.vscode.ts) — the gulp task name and the output folder
+# name it produces both follow this same `<platform>-<arch>` pattern.
+GULP_TASK="vscode-${PLATFORM}-${ARCH}-min"
+DEST_FOLDER="VSCode-${PLATFORM}-${ARCH}"
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_TAG="$(cat "$SELF_DIR/UPSTREAM_TAG")"
@@ -83,7 +126,11 @@ with open(product_path, "w") as f:
 PYEOF
 
 echo "==> installing HUPI branding"
-cp "$SELF_DIR/resources/linux/icons/hupi-code-512.png" "$WORKDIR/resources/linux/code.png"
+case "$PLATFORM" in
+  linux)  cp "$SELF_DIR/resources/linux/icons/hupi-code-512.png" "$WORKDIR/resources/linux/code.png" ;;
+  win32)  cp "$SELF_DIR/resources/win32/code.ico" "$WORKDIR/resources/win32/code.ico" ;;
+  darwin) cp "$SELF_DIR/resources/darwin/code.icns" "$WORKDIR/resources/darwin/code.icns" ;;
+esac
 
 echo "==> building the HUPI extension (source of truth: $HUPI_EXTENSION_DIR)"
 ( cd "$HUPI_EXTENSION_DIR" && npm ci && npm run build )
@@ -154,10 +201,10 @@ echo "==> removing Microsoft's bundled Copilot extension"
 # instead when copilot is genuinely absent.
 rm -rf "$WORKDIR/extensions/copilot"
 
-echo "==> building vscode-linux-x64-min"
-( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp vscode-linux-x64-min )
+echo "==> building $GULP_TASK"
+( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp "$GULP_TASK" )
 
 echo "==> copying build output to $OUT_DIR"
-cp -r "$WORKROOT/VSCode-linux-x64" "$OUT_DIR/"
+cp -r "$WORKROOT/$DEST_FOLDER" "$OUT_DIR/"
 
-echo "HUPI Code built: $OUT_DIR/VSCode-linux-x64"
+echo "HUPI Code built: $OUT_DIR/$DEST_FOLDER"
