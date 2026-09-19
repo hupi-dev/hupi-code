@@ -102,6 +102,15 @@ jobs:
         working-directory: hupi-code
         env:
           HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+          # VS Code's own preinstall.ts requires a real C/C++ toolchain for
+          # native modules and checks for one by looking for a VS2022/2019
+          # install directory under %ProgramFiles%. windows-latest ships
+          # VS2022 Enterprise, but auto-detection didn't find it when this
+          # check ran from a child process of this bash step (a real CI
+          # failure, not a hypothetical) — the explicit override env var
+          # VS Code's own error message points at sidesteps whatever's
+          # going on with env var passing through that process tree.
+          vs2022_install: C:\Program Files\Microsoft Visual Studio\2022\Enterprise
         run: OUT_DIR="${{ github.workspace }}/out" ./build/build.sh
 
       - name: Smoke test
