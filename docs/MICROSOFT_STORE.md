@@ -23,33 +23,36 @@ needs — real VS Code itself isn't on it either, for the same reason).
   folder (from `build.sh`) and wraps it into a `.msix` via `makeappx.exe`
   (part of the Windows SDK, already on GitHub's `windows-latest` runners).
 
-## What only a human can do first
+## Done
 
-1. **Register a Microsoft Partner Center account** — partner.microsoft.com,
-   individual tier is a one-time $19 fee, lighter identity verification
-   than Azure Trusted Signing's business validation wanted.
-2. **Reserve the app name** ("HUPI Code") in Partner Center. This is what
-   produces the real `Identity Name` and `Publisher` values —
-   `AppxManifest.xml.template`'s `@@IDENTITY_NAME@@`/`@@PUBLISHER@@`
-   placeholders — shown on the app's own Identity page afterward. There's
-   no way to generate or guess these ahead of time; `package-msix.sh`
-   will build a structurally valid `.msix` with the wrong identity until
-   these are supplied, and Partner Center will reject that on submission.
-3. **A privacy policy URL** — Store submissions require one whenever the
+1. ~~Register a Microsoft Partner Center account~~ — done.
+2. ~~Reserve the app name ("HUPI Code") in Partner Center~~ — done, as of
+   2026-09-19. The real `Identity Name`/`Publisher` values from that
+   reservation (`HUPICode.HUPICode` /
+   `CN=7A8FE7AC-7EFD-475E-8E35-35E59012B58B`) are now the defaults in
+   `build/package-msix.sh` and in `AppxManifest.xml.template`'s
+   `PublisherDisplayName` — public identifiers, not secrets, so
+   committing them directly is fine.
+
+## What only a human can still do
+
+1. **A privacy policy URL** — Store submissions require one whenever the
    app makes network calls, which HUPI Code does (to your own configured
    gateway). Needs to live somewhere reachable, e.g. a page on hupi.dev.
-4. **The first submission itself** goes through the Partner Center web UI
+2. **The first submission itself** goes through the Partner Center web UI
    by hand — screenshots, description, age rating questionnaire, the
    privacy policy URL above, and the `.msix` from `package-msix.sh`.
    Certification review is usually hours to a few days.
 
-## Once identity values exist
+## Building the package
 
 ```bash
-MSIX_IDENTITY_NAME="<from Partner Center>" \
-MSIX_PUBLISHER="<from Partner Center>" \
-  ./build/package-msix.sh ./out/VSCode-win32-x64 ./out/hupi-code.msix
+./build/package-msix.sh ./out/VSCode-win32-x64 ./out/hupi-code.msix
 ```
+
+No env vars needed for the common case now that the identity is
+committed as the script's default — `MSIX_IDENTITY_NAME`/
+`MSIX_PUBLISHER` still override if the reservation is ever redone.
 
 Install it locally first to sanity-check before ever submitting — MSIX
 sideload installation needs either a trusted signing certificate (an

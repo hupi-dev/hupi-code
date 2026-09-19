@@ -60,10 +60,11 @@ uses them yet since only the raw unsigned binary folder is produced today.
 
 A separate Windows channel is also in progress: the **Microsoft Store**,
 which signs the package itself during certification — no code-signing
-certificate needed for that path. See
-[docs/MICROSOFT_STORE.md](docs/MICROSOFT_STORE.md) for what's already
-built (an MSIX manifest template, Store icon assets, a packaging script)
-and what's blocked on a human completing Partner Center registration.
+certificate needed for that path. "HUPI Code" is reserved in Partner
+Center and `build/package-msix.sh` builds a real, correctly-identified
+`.msix` today — see [docs/MICROSOFT_STORE.md](docs/MICROSOFT_STORE.md)
+for what's left (a privacy policy URL, then the first submission, which
+has to go through Partner Center's web UI by hand).
 
 ## Why this repo is small
 
