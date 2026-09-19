@@ -61,6 +61,15 @@ else
   echo "preinstall version check fails, install nvm and re-run." >&2
 fi
 
+echo "==> removing Microsoft's bundled Copilot extension"
+# A HUPI-native IDE shouldn't ship a competing chat extension alongside
+# HUPI's own. Removing the source is straightforward; the packaging
+# pipeline's own prepareBuiltInCopilotRipgrepShim step (build/lib/
+# copilot.ts) runs unconditionally regardless and hard-fails if the
+# extension's SDK isn't present — patches/0001-*.patch is what makes
+# that a no-op instead when copilot is genuinely absent.
+rm -rf "$WORKDIR/extensions/copilot"
+
 echo "==> applying patches"
 shopt -s nullglob
 for patch in "$SELF_DIR"/patches/*.patch; do

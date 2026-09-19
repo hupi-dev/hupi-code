@@ -9,15 +9,22 @@ built-in part of the editor itself, on first launch, no install step.
 
 Phase 1: a rebranded VS Code — different name, icon, and identity
 strings, the HUPI extension bundled in as a true built-in (can't be
-disabled or uninstalled from the UI), and an [open-vsx.org](https://open-vsx.org)
+disabled or uninstalled from the UI), Microsoft's own bundled Copilot
+extension removed (a HUPI-native IDE shouldn't ship a competing chat
+extension alongside HUPI's own), and an [open-vsx.org](https://open-vsx.org)
 extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
-VSCodium included, points here instead). No changes to VS Code's own
-editor/workbench behavior — a lot of what "feels like Cursor" is
-achievable through VS Code's own extension API (native chat UI, inline
-ghost-text completions, custom diff panels) without touching upstream
-source at all, and that's the direction future work goes in before any
-real core patching starts.
+VSCodium included, points here instead).
+
+One small core patch was unavoidable even at this stage —
+`patches/0001-*.patch` stops VS Code's own packaging pipeline from
+hard-failing over Copilot's absence (it unconditionally prepares
+Copilot's ripgrep shim regardless of whether the extension exists at
+all). No UI/UX changes to VS Code's own editor or workbench, though — a
+lot of what "feels like Cursor" is achievable through VS Code's own
+extension API (native chat UI, inline ghost-text completions, custom
+diff panels) without touching upstream source, and that's the direction
+future work goes in before any real UX-level core patching starts.
 
 Linux only for now — see [docs/BUILD.md](docs/BUILD.md).
 

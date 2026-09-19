@@ -1,0 +1,20 @@
+diff --git a/build/lib/copilot.ts b/build/lib/copilot.ts
+index 908bf979..ac998c85 100644
+--- a/build/lib/copilot.ts
++++ b/build/lib/copilot.ts
+@@ -256,6 +256,15 @@ export function ensureCopilotPlatformPackage(platform: string, arch: string, nod
+  * this artifact is present.
+  */
+ export function prepareBuiltInCopilotRipgrepShim(platform: string, arch: string, builtInCopilotExtensionDir: string, appNodeModulesDir: string, options: PrepareBuiltInCopilotOptions = {}): void {
++	// HUPI Code patch: this repo deliberately doesn't bundle Microsoft's
++	// own Copilot extension (see hupi-code/patches/ — a HUPI-native IDE
++	// shouldn't ship a competing chat extension alongside HUPI's own).
++	// Upstream's own packaging pipeline calls this unconditionally
++	// regardless of whether extensions/copilot exists, and hard-fails if
++	// its SDK isn't present. No-op instead when it's genuinely absent.
++	if (!fs.existsSync(builtInCopilotExtensionDir)) {
++		return;
++	}
+ 	const { nodePlatform, nodeArch } = toNodePlatformArch(platform, arch);
+ 	const platformArch = `${nodePlatform}-${nodeArch}`;
+ 	const copilotPackagePlatformArch = toCopilotPackagePlatformArch(platform, arch);
