@@ -208,6 +208,31 @@ echo "==> removing Microsoft's bundled Copilot extension"
 # instead when copilot is genuinely absent.
 rm -rf "$WORKDIR/extensions/copilot"
 
+if [ "$PLATFORM" = win32 ]; then
+  echo "==> locating signtool.exe"
+  # patchWin32DependenciesTask (build/gulpfile.vscode.ts) runs
+  # unconditionally for every win32 build — for every bundled .node/
+  # rg.exe/tgrep.exe/etc. it spawns `signtool.exe verify` to check for an
+  # existing Authenticode signature to strip before rcedit patches the
+  # file's version info (rcedit invalidates signatures, so any pre-
+  # existing one needs stripping first). None of that needs an actual
+  # cert of ours — it's just detecting/removing *other* signatures — but
+  # the tool itself still needs to exist on PATH, and it isn't by
+  # default even though the Windows SDK it ships in is installed
+  # alongside VS on GitHub's windows-latest image. A real failure
+  # ("spawn signtool.exe ENOENT"), not hypothetical — searching for it
+  # here instead of hardcoding an SDK version number avoids repeating
+  # the exact mistake the vs2022_install override made (guessing a
+  # version-specific path that turned out not to exist on this image).
+  SIGNTOOL="$(find '/c/Program Files (x86)/Windows Kits/10/bin' -iname 'signtool.exe' -path '*x64*' 2>/dev/null | sort -V | tail -1)"
+  if [ -n "$SIGNTOOL" ]; then
+    echo "    found: $SIGNTOOL"
+    export PATH="$PATH:$(dirname "$SIGNTOOL")"
+  else
+    echo "    WARNING: signtool.exe not found under Windows Kits — the win32 packaging task will likely fail" >&2
+  fi
+fi
+
 echo "==> building $GULP_TASK"
 ( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp "$GULP_TASK" )
 
