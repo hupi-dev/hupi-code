@@ -58,6 +58,13 @@ are also still open — `product-overlay.json`'s `win32AppId`/
 placeholders) so that work isn't blocked when it starts, but nothing
 uses them yet since only the raw unsigned binary folder is produced today.
 
+A separate Windows channel is also in progress: the **Microsoft Store**,
+which signs the package itself during certification — no code-signing
+certificate needed for that path. See
+[docs/MICROSOFT_STORE.md](docs/MICROSOFT_STORE.md) for what's already
+built (an MSIX manifest template, Store icon assets, a packaging script)
+and what's blocked on a human completing Partner Center registration.
+
 ## Why this repo is small
 
 VS Code's own source (~19k files) is never vendored here. This repo
