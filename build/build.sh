@@ -90,7 +90,14 @@ WORKDIR="$WORKROOT/vscode"
 trap 'rm -rf "$WORKROOT"' EXIT
 
 echo "==> cloning microsoft/vscode @ $UPSTREAM_TAG into $WORKDIR"
-git clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/microsoft/vscode.git "$WORKDIR"
+# core.autocrlf=false, scoped to just this clone: on Windows, Git for
+# Windows' own default (core.autocrlf=true) checks files out with CRLF
+# line endings, but patches/*.patch were authored with LF-only content —
+# git apply's context matching fails on the mismatch ("patch does not
+# apply") even though the actual diff content is correct. Forcing LF
+# here keeps behavior identical across all three OSes instead of trying
+# to make every patch CRLF-tolerant.
+git -c core.autocrlf=false clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/microsoft/vscode.git "$WORKDIR"
 
 echo "==> installing the exact Node version this tag requires"
 if [ -f ~/.nvm/nvm.sh ]; then
