@@ -30,11 +30,39 @@ a fork-and-merge model). Upgrading is:
 5. Bump `hupi/vscode-extension`'s own `engines.vscode` field if the new
    tag's API surface requires it.
 
-## Why patches/ is empty right now
+## Known-bad upstream release: 1.138.0
 
-Phase 1 (see the main README) deliberately does zero core patches —
-branding and the bundled extension cover everything needed so far. The
-mechanism above exists and is exercised (the `git apply` loop runs on
-every build) so that adding the first real patch later is "drop a file
-in `patches/`," not "build this machinery for the first time under
-pressure."
+`UPSTREAM_TAG` is pinned to `1.137.0`, one release behind the latest at
+the time this was written, on purpose. `1.138.0`'s own `npm ci` fails
+deterministically — reproduced on two independent machines, 3/3
+attempts each — with `spawn /bin/sh ENOENT` partway through
+`build/npm/postinstall.ts`, on a **completely vanilla, unmodified**
+checkout (no overlay, no patches, no extension bundling involved). This
+is a real bug in that specific release's own build tooling, not
+something this repo did — confirmed by cloning `1.137.0` plain and
+watching the identical `npm ci` succeed cleanly. Worth trying `1.138.0`
+again (or whatever's newest) next time this file is used, since it may
+already be fixed upstream by then.
+
+## Why removing extensions/copilot happens after npm ci, not before
+
+`build.sh` deletes `extensions/copilot` **after** `npm ci` completes,
+never before. `npm ci`'s own postinstall enumerates and installs every
+`extensions/*` subdirectory itself, copilot included — deleting it
+first leaves a dangling reference that fails with a completely
+unrelated-looking `spawn /bin/sh ENOENT` (a real Node quirk: a spawn
+whose `cwd` doesn't exist reports exactly this misleading error under
+`shell: true`, not a clearer "directory not found"). This is the same
+error string as the 1.138.0 bug above but a different, self-inflicted
+cause — worth knowing the difference before assuming a new upstream tag
+is broken when the real issue is this repo's own step ordering.
+
+## Patches so far
+
+`patches/0001-skip-copilot-ripgrep-shim-when-copilot-not-bundled.patch`
+— makes VS Code's own packaging pipeline tolerate `extensions/copilot`
+being absent, since it otherwise calls `prepareBuiltInCopilotRipgrepShim`
+(`build/lib/copilot.ts`) unconditionally and hard-fails without it. Not
+a UI/UX core patch in the Phase 3 sense (see the main README) — narrow
+and mechanical, needed just to build without Microsoft's bundled
+Copilot at all.

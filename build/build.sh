@@ -61,15 +61,6 @@ else
   echo "preinstall version check fails, install nvm and re-run." >&2
 fi
 
-echo "==> removing Microsoft's bundled Copilot extension"
-# A HUPI-native IDE shouldn't ship a competing chat extension alongside
-# HUPI's own. Removing the source is straightforward; the packaging
-# pipeline's own prepareBuiltInCopilotRipgrepShim step (build/lib/
-# copilot.ts) runs unconditionally regardless and hard-fails if the
-# extension's SDK isn't present — patches/0001-*.patch is what makes
-# that a no-op instead when copilot is genuinely absent.
-rm -rf "$WORKDIR/extensions/copilot"
-
 echo "==> applying patches"
 shopt -s nullglob
 for patch in "$SELF_DIR"/patches/*.patch; do
@@ -145,6 +136,23 @@ for attempt in $(seq 1 "$NPM_CI_ATTEMPTS"); do
   echo "npm ci failed (attempt $attempt/$NPM_CI_ATTEMPTS) — retrying" >&2
   sleep 5
 done
+
+echo "==> removing Microsoft's bundled Copilot extension"
+# A HUPI-native IDE shouldn't ship a competing chat extension alongside
+# HUPI's own. This must happen AFTER npm ci, not before: npm ci's own
+# postinstall (build/npm/postinstall.ts) enumerates and installs every
+# extensions/* subdirectory itself, copilot included — deleting it
+# first leaves a dangling reference that fails with a confusingly
+# unrelated "spawn /bin/sh ENOENT" (a real, reproduced-twice Node
+# quirk: a spawn whose cwd doesn't exist reports this exact misleading
+# error under `shell: true`, not a clearer "directory not found").
+# Removing it here, after npm ci has already processed it, is safe —
+# the packaging pipeline's own prepareBuiltInCopilotRipgrepShim step
+# (build/lib/copilot.ts) still runs unconditionally regardless of
+# copilot's presence and hard-fails if its SDK isn't there;
+# patches/0001-*.patch (applied above) is what makes that a no-op
+# instead when copilot is genuinely absent.
+rm -rf "$WORKDIR/extensions/copilot"
 
 echo "==> building vscode-linux-x64-min"
 ( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp vscode-linux-x64-min )
