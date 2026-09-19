@@ -1,0 +1,61 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  linux-x64:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out hupi-code
+        uses: actions/checkout@v4
+        with:
+          path: hupi-code
+
+      - name: Check out hupi (for vscode-extension)
+        uses: actions/checkout@v4
+        with:
+          repository: hupi-dev/hupi
+          ref: main
+          path: hupi
+
+      - name: Install Linux build/runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            pkg-config libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 \
+            rpm bubblewrap socat libsecret-1-dev libx11-dev \
+            libasound2t64 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
+            libxss1 xvfb || \
+          sudo apt-get install -y -qq \
+            pkg-config libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 \
+            rpm bubblewrap socat libsecret-1-dev libx11-dev \
+            libasound2 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
+            libxss1 xvfb
+
+      - name: Set up nvm
+        run: |
+          curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.5/install.sh | bash
+
+      - name: Build HUPI Code
+        working-directory: hupi-code
+        env:
+          HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+        run: |
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          OUT_DIR="${{ github.workspace }}/out" ./build/build.sh
+
+      - name: Smoke test
+        working-directory: hupi-code
+        run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-linux-x64"
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-linux-x64
+          path: out/VSCode-linux-x64
+          retention-days: 7

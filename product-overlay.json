@@ -1,0 +1,28 @@
+{
+  "nameShort": "HUPI Code",
+  "nameLong": "HUPI Code",
+  "applicationName": "hupi-code",
+  "dataFolderName": ".hupi-code",
+  "win32MutexName": "hupicode",
+  "win32DirName": "HUPI Code",
+  "win32NameVersion": "HUPI Code",
+  "win32RegValueName": "HUPICode",
+  "win32AppId": "{{D1B7B4C0-8F5A-4E1C-9D2A-HUPICODE00001}",
+  "win32x64AppId": "{{D1B7B4C0-8F5A-4E1C-9D2A-HUPICODE00002}",
+  "win32UserAppId": "{{D1B7B4C0-8F5A-4E1C-9D2A-HUPICODE00003}",
+  "win32x64UserAppId": "{{D1B7B4C0-8F5A-4E1C-9D2A-HUPICODE00004}",
+  "win32AppUserModelId": "HUPI.Code",
+  "win32ShellNameShort": "HUPI Code",
+  "darwinBundleIdentifier": "dev.hupi.code",
+  "linuxIconName": "hupi-code",
+  "licenseName": "MIT",
+  "urlProtocol": "hupi-code",
+  "extensionsGallery": {
+    "serviceUrl": "https://open-vsx.org/vscode/gallery",
+    "itemUrl": "https://open-vsx.org/vscode/item",
+    "resourceUrlTemplate": "https://open-vsx.org/vscode/unpkg/{publisher}/{name}/{version}/{path}"
+  },
+  "reportIssueUrl": "https://github.com/hupi-dev/hupi-code/issues/new",
+  "requestFeatureUrl": "https://github.com/hupi-dev/hupi-code/issues/new",
+  "documentationUrl": "https://hupi.dev/docs"
+}
