@@ -125,6 +125,22 @@ jobs:
           path: out/VSCode-win32-x64
           retention-days: 7
 
+      # Not a Store submission — that's still a manual, human step through
+      # Partner Center's web UI (see docs/MICROSOFT_STORE.md). This just
+      # keeps a ready-to-test .msix available on every push, using the
+      # real "HUPI Code" identity already committed in package-msix.sh.
+      - name: Package MSIX
+        shell: bash
+        working-directory: hupi-code
+        run: ./build/package-msix.sh "${{ github.workspace }}/out/VSCode-win32-x64" "${{ github.workspace }}/out/hupi-code.msix"
+
+      - name: Upload MSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-msix
+          path: out/hupi-code.msix
+          retention-days: 7
+
   macos-arm64:
     runs-on: macos-latest
     steps:
