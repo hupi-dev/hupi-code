@@ -124,7 +124,27 @@ with open(path, "w") as f:
 PYEOF
 
 echo "==> npm ci (the expensive step — VS Code's own dependency tree)"
-( cd "$WORKDIR" && npm ci )
+# Retried on purpose: VS Code's own postinstall (build/npm/postinstall.ts)
+# fans out into dozens of concurrent child npm installs across
+# extensions/*, and under real resource contention one of those child
+# processes can transiently fail to spawn its own shell ("spawn /bin/sh
+# ENOENT") — reproduced identically on two independent machines (this
+# sandbox and a GitHub Actions runner) at the exact same step, both
+# resource-constrained, neither a deterministic logic bug. npm ci is
+# always safe to retry — it reconciles against package-lock.json from
+# scratch every time.
+NPM_CI_ATTEMPTS=3
+for attempt in $(seq 1 "$NPM_CI_ATTEMPTS"); do
+  if ( cd "$WORKDIR" && npm ci ); then
+    break
+  fi
+  if [ "$attempt" -eq "$NPM_CI_ATTEMPTS" ]; then
+    echo "npm ci failed after $NPM_CI_ATTEMPTS attempts" >&2
+    exit 1
+  fi
+  echo "npm ci failed (attempt $attempt/$NPM_CI_ATTEMPTS) — retrying" >&2
+  sleep 5
+done
 
 echo "==> building vscode-linux-x64-min"
 ( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp vscode-linux-x64-min )
