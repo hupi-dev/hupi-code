@@ -97,6 +97,35 @@ jobs:
           # equivalent of the Linux job's nvm install/use for this OS.
           node-version: '24.18.0'
 
+      # Diagnostic only — two attempts at fixing "Invalid C/C++ Compiler
+      # Toolchain" (core.autocrlf and an explicit vs2022_install override)
+      # both failed with the identical error, which no longer looks like
+      # a wrong-guessed-path problem. This prints real ground truth
+      # (what's actually installed, and what a bash child process sees
+      # for the exact env vars build/npm/preinstall.ts reads) instead of
+      # guessing a third path blind. Remove once the real fix lands.
+      - name: Debug VS install detection
+        run: |
+          Write-Host "--- vswhere (all installs) ---"
+          & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -all -format text
+          Write-Host "--- Program Files\Microsoft Visual Studio ---"
+          Get-ChildItem "$env:ProgramFiles\Microsoft Visual Studio" -ErrorAction SilentlyContinue
+          Write-Host "--- Program Files (x86)\Microsoft Visual Studio ---"
+          Get-ChildItem "${env:ProgramFiles(x86)}\Microsoft Visual Studio" -ErrorAction SilentlyContinue
+          Write-Host "--- pwsh sees these env vars as ---"
+          Write-Host "ProgramFiles=$env:ProgramFiles"
+          Write-Host "ProgramFiles(x86)=${env:ProgramFiles(x86)}"
+
+      - name: Debug VS install detection (from bash)
+        shell: bash
+        run: |
+          echo "--- bash sees these env vars as ---"
+          echo "ProgramFiles=$ProgramFiles"
+          echo "ProgramFiles(x86) via env -0:"
+          env -0 | tr '\0' '\n' | grep -i "^programfiles" || echo "(no ProgramFiles* var visible to bash at all)"
+          echo "--- node's own view (closest to what preinstall.ts actually sees) ---"
+          node -e "console.log(JSON.stringify({ProgramFiles: process.env['ProgramFiles'], 'ProgramFiles(x86)': process.env['ProgramFiles(x86)']}, null, 2))"
+
       - name: Build HUPI Code
         shell: bash
         working-directory: hupi-code
