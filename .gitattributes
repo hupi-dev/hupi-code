@@ -1,0 +1,9 @@
+# Without this, actions/checkout on Windows checks these out with CRLF
+# line endings (Git for Windows' core.autocrlf=true default) — patches
+# authored on Linux/macOS are LF-only, so git apply's context-line
+# matching fails with "patch does not apply" even though the diff
+# content itself is correct (a real windows-x64 CI failure this fixed).
+# Shell scripts pinned the same way since Git Bash tolerates CRLF
+# inconsistently depending on the construct.
+*.patch text eol=lf
+*.sh text eol=lf
