@@ -16,25 +16,32 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-One small core patch was unavoidable even at this stage —
-`patches/0001-*.patch` stops VS Code's own packaging pipeline from
-hard-failing over Copilot's absence (it unconditionally prepares
-Copilot's ripgrep shim regardless of whether the extension exists at
-all). No UI/UX changes to VS Code's own editor or workbench, though — a
-lot of what "feels like Cursor" is achievable through VS Code's own
-extension API (native chat UI, inline ghost-text completions, custom
-diff panels) without touching upstream source, and that's the direction
-future work goes in before any real UX-level core patching starts.
+Two core patches so far. `patches/0001-*.patch` is mechanical, not
+UX — it stops VS Code's own packaging pipeline from hard-failing over
+Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
+regardless of whether the extension exists at all). `patches/0002-*.patch`
+is the first real Phase 3 UX-level patch: it removes the four
+"Use AI features with Copilot for free" steps upstream leads its
+first-launch Getting Started walkthrough with — core workbench content,
+not reachable via `product-overlay.json` or by just removing the
+Copilot extension, and not something a HUPI-native IDE (which already
+bundles its own chat) should be steering new users toward. Everything
+else so far is still extension-API-only — a lot of what "feels like
+Cursor" (native chat UI, inline ghost-text completions, custom diff
+panels) is reachable that way, without touching upstream source, and
+that's still the preferred direction before reaching for another core
+patch.
 
 Linux only for now — see [docs/BUILD.md](docs/BUILD.md).
 
 ## Why this repo is small
 
 VS Code's own source (~19k files) is never vendored here. This repo
-holds a pinned upstream tag (`UPSTREAM_TAG`), a `patches/` directory
-(empty right now — see [docs/UPSTREAM_UPGRADES.md](docs/UPSTREAM_UPGRADES.md)
-for why it exists anyway), branding assets, and build scripts that
-clone-patch-build fresh every time. This is exactly
+holds a pinned upstream tag (`UPSTREAM_TAG`), a small `patches/`
+directory (two patches so far — see
+[docs/UPSTREAM_UPGRADES.md](docs/UPSTREAM_UPGRADES.md)), branding
+assets, and build scripts that clone-patch-build fresh every time. This
+is exactly
 [VSCodium](https://github.com/VSCodium/vscodium)'s own model, chosen
 for the same reason they chose it: bumping upstream is "move the pin,
 resolve patch conflicts," not a multi-hundred-thousand-line merge, which
@@ -45,7 +52,7 @@ upstream releases.
 
 ```
 UPSTREAM_TAG          pinned microsoft/vscode git tag
-patches/               ordered *.patch files (empty for now)
+patches/               ordered *.patch files applied to the pinned tag
 product-overlay.json   branding/identity/gallery overrides merged onto
                        the pinned tag's own product.json at build time
 resources/             HUPI icon set

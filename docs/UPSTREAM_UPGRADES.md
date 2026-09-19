@@ -66,3 +66,24 @@ being absent, since it otherwise calls `prepareBuiltInCopilotRipgrepShim`
 a UI/UX core patch in the Phase 3 sense (see the main README) — narrow
 and mechanical, needed just to build without Microsoft's bundled
 Copilot at all.
+
+`patches/0002-remove-copilot-setup-steps-from-getting-started.patch` —
+the actual first Phase 3 UX-level patch. Upstream's Getting Started
+walkthrough (`src/vs/workbench/contrib/welcomeGettingStarted/common/gettingStartedContent.ts`)
+leads its first-launch "Setup" walkthrough with one of four variants of
+a "Use AI features with Copilot for free" step, hardcoded in core
+workbench content — not something `product-overlay.json` reaches, and
+not tied to whether `extensions/copilot` is even present (it's shown
+based on chat-entitlement context keys, unrelated to the extension
+folder). A HUPI-native IDE that already bundles its own chat (the
+sidebar and `@hupi` participant, from `hupi/vscode-extension`) shouldn't
+lead new users toward a competing product instead. The patch removes
+the four `createCopilotSetupStep(...)` step entries and the
+now-unused constants/helper feeding them (left in place, they'd fail
+the build outright — `src/tsconfig.base.json` sets `noUnusedLocals`).
+Investigated but deliberately not used: an enterprise "Account Policy
+Gate" mechanism (`accountPolicyGateContribution.ts`) can force-hide
+chat-setup UI, but it's policy/entitlement machinery for org-managed
+Copilot access, not a general on/off switch — reaching for it here
+would have been a bigger, less legible change for the same outcome a
+small content patch already gets cleanly.

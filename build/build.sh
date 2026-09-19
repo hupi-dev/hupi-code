@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Builds HUPI Code: shallow-clones microsoft/vscode at UPSTREAM_TAG into a
-# scratch dir, applies patches/*.patch (empty for now — see
-# docs/UPSTREAM_UPGRADES.md), overlays product-overlay.json onto the
+# scratch dir, applies patches/*.patch (see docs/UPSTREAM_UPGRADES.md for
+# what's there and why), overlays product-overlay.json onto the
 # checkout's own product.json, drops in HUPI's icon and the pre-built
 # hupi-native extension as a true built-in (can't be disabled/uninstalled
 # from the UI, same folder-under-extensions/ convention every other
