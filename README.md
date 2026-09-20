@@ -26,10 +26,10 @@ first-launch Getting Started walkthrough with — core workbench content,
 not reachable via `product-overlay.json` or by just removing the
 Copilot extension, and not something a HUPI-native IDE (which already
 bundles its own chat) should be steering new users toward.
-`patches/0003-*.patch` disables `AgentHostPrewarmContribution`, which
-eagerly spawns Microsoft's own local agent-host utility process on every
-desktop window regardless of whether anything uses it — found because
-it hung indefinitely on a real Windows CI run, blocking the whole
+`patches/0003-*.patch` disables Microsoft's own local agent-host
+infrastructure (backing Claude Agent/Codex Agent/Copilot CLI
+integrations) outright — HUPI Code doesn't use any of it, and it hung
+indefinitely on two separate real Windows CI runs, blocking the whole
 window from ever finishing startup. Everything else so far is still
 extension-API-only — a lot of what "feels like Cursor" (native chat UI,
 inline ghost-text completions, custom diff panels) is reachable that

@@ -1,3 +1,27 @@
+diff --git a/src/vs/platform/agentHost/electron-browser/localAgentHostService.ts b/src/vs/platform/agentHost/electron-browser/localAgentHostService.ts
+index 6127aa05..40a4835c 100644
+--- a/src/vs/platform/agentHost/electron-browser/localAgentHostService.ts
++++ b/src/vs/platform/agentHost/electron-browser/localAgentHostService.ts
+@@ -204,6 +204,19 @@ export class LocalAgentHostServiceClient extends Disposable implements IAgentHos
+ 	}
+ 
+ 	startAgentHost(): void {
++		// HUPI Code patch: disabling AgentHostPrewarmContribution's eager
++		// call (patches/0003) wasn't sufficient — some other path still
++		// reached this method and hung on a real Windows CI run (no
++		// AgentHostProcessManager log line that time, ruling out the
++		// prewarm contribution specifically, but the app still never
++		// progressed past window startup). Rather than chase every
++		// possible caller through this service's many consumers
++		// (AgentHostTerminalContribution, AgentHostSessionListContribution,
++		// etc. in agentHost.contribution.ts), no-op the actual connection
++		// choke point directly — HUPI Code doesn't use Microsoft's own
++		// agent-hosting infrastructure at all, so nothing legitimately
++		// needs this to ever actually connect.
++		return;
+ 		if (!this._protocolClient) {
+ 			mark('code/agentHost/willStart');
+ 			this._startupTelemetry = this._register(this._instantiationService.createInstance(
 diff --git a/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts b/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts
 index 2a89b7d1..0bdfeb27 100644
 --- a/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts
