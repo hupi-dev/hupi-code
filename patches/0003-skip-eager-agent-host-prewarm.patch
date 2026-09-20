@@ -1,0 +1,30 @@
+diff --git a/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts b/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts
+index 2a89b7d1..0bdfeb27 100644
+--- a/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts
++++ b/src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts
+@@ -21,7 +21,7 @@ import { CopilotCliVSCodeAssignmentContextKey } from '../../../../platform/agent
+ import { ActionType } from '../../../../platform/agentHost/common/state/sessionActions.js';
+ import { ROOT_STATE_URI } from '../../../../platform/agentHost/common/state/sessionState.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+-import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
++import { IWorkbenchContribution } from '../../../common/contributions.js';
+ import { IWorkbenchAssignmentService } from '../../assignment/common/assignmentService.js';
+ import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
+ import { EditorRemoteAgentHostServiceClient } from '../browser/editorRemoteAgentHostServiceClient.js';
+@@ -115,4 +115,15 @@ registerSingleton(
+ 	InstantiationType.Delayed,
+ );
+ 
+-registerWorkbenchContribution2(AgentHostPrewarmContribution.ID, AgentHostPrewarmContribution, WorkbenchPhase.BlockRestore);
++// HUPI Code patch: AgentHostPrewarmContribution eagerly spawns Microsoft's
++// own local agent-host utility process on every desktop window (a
++// "prewarm for instant chat" optimization), regardless of whether
++// anything ever uses it — a HUPI-native IDE doesn't use this
++// infrastructure at all (same reasoning as the Copilot-removal patch).
++// Also observed, on a real Windows CI run, to hang indefinitely during
++// this process's own startup, blocking the whole window from ever
++// finishing initialization — not registering the contribution at all
++// means IAgentHostService itself (registered above) is never triggered
++// on startup; it would still be created normally if some future feature
++// actually asked for it on demand.
++// registerWorkbenchContribution2(AgentHostPrewarmContribution.ID, AgentHostPrewarmContribution, WorkbenchPhase.BlockRestore);

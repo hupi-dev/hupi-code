@@ -87,3 +87,27 @@ chat-setup UI, but it's policy/entitlement machinery for org-managed
 Copilot access, not a general on/off switch — reaching for it here
 would have been a bigger, less legible change for the same outcome a
 small content patch already gets cleanly.
+
+`patches/0003-skip-eager-agent-host-prewarm.patch` — found via a real,
+reproducible Windows CI failure, not proactively. `AgentHostPrewarmContribution`
+(`src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts`,
+registered at `WorkbenchPhase.BlockRestore`, an early/eager lifecycle
+phase) unconditionally calls `agentHostService.startAgentHost()` on
+every desktop window once `agentHostEnablementService.enabled` reads
+true — Microsoft's own "prewarm the local agent-host utility process
+for instant chat" optimization. On a real windows-x64 GitHub Actions
+run this hung indefinitely during that process's own startup (visible
+in the app's log as `AgentHostProcessManager: agent host started`
+followed by total silence — no extension host, no window — until the
+smoke test's own timeout killed it), blocking the entire window from
+ever finishing initialization; Linux and macOS were unaffected in the
+same run. Traced through the actual call chain (`AgentHostPrewarmContribution`
+→ `AgentHostPrewarmer` → `agentHostService.startAgentHost()` →
+`ElectronAgentHostStarter`/`AgentHostProcessManager` in
+`electron-main/app.ts`) rather than guessed. The patch comments out
+just the one `registerWorkbenchContribution2(...)` call — `IAgentHostService`
+itself stays registered, so it would still be created normally if some
+future feature actually asked for it on demand; only the unconditional
+eager prewarm is disabled. HUPI Code doesn't use Microsoft's own
+agent-hosting infrastructure at all, so this is a strict win regardless
+of the Windows hang.

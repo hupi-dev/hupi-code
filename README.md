@@ -16,7 +16,7 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-Two core patches so far. `patches/0001-*.patch` is mechanical, not
+Three core patches so far. `patches/0001-*.patch` is mechanical, not
 UX — it stops VS Code's own packaging pipeline from hard-failing over
 Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
 regardless of whether the extension exists at all). `patches/0002-*.patch`
@@ -25,12 +25,16 @@ is the first real Phase 3 UX-level patch: it removes the four
 first-launch Getting Started walkthrough with — core workbench content,
 not reachable via `product-overlay.json` or by just removing the
 Copilot extension, and not something a HUPI-native IDE (which already
-bundles its own chat) should be steering new users toward. Everything
-else so far is still extension-API-only — a lot of what "feels like
-Cursor" (native chat UI, inline ghost-text completions, custom diff
-panels) is reachable that way, without touching upstream source, and
-that's still the preferred direction before reaching for another core
-patch.
+bundles its own chat) should be steering new users toward.
+`patches/0003-*.patch` disables `AgentHostPrewarmContribution`, which
+eagerly spawns Microsoft's own local agent-host utility process on every
+desktop window regardless of whether anything uses it — found because
+it hung indefinitely on a real Windows CI run, blocking the whole
+window from ever finishing startup. Everything else so far is still
+extension-API-only — a lot of what "feels like Cursor" (native chat UI,
+inline ghost-text completions, custom diff panels) is reachable that
+way, without touching upstream source, and that's still the preferred
+direction before reaching for another core patch.
 
 Linux, Windows, and macOS (arm64) all build in CI now — see
 [docs/BUILD.md](docs/BUILD.md). Windows/macOS builds are **unsigned**:
