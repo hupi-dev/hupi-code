@@ -1,13 +1,17 @@
 # Publishing HUPI Code to the Microsoft Store
 
-Why bother with this alongside the direct Windows download: the Store
-**signs the package itself** during certification — you don't need your
-own code-signing certificate for this channel (unlike a direct/sideloaded
-`.exe`, which does — see the main README's Distribution status section
-for that separate effort). It's Windows-only; there's no macOS
-equivalent worth pursuing (the Mac App Store's sandboxing is quite
-restrictive for a full-featured editor with filesystem/process access
-needs — real VS Code itself isn't on it either, for the same reason).
+This is the *only* Windows distribution channel for HUPI Code, not one
+option alongside a direct download — the Store **signs the package
+itself** during certification, sidestepping a real blocker: a direct/
+sideloaded `.msix`/`.exe` needs our own Windows code-signing certificate
+to install without being rejected outright, and Azure Artifact Signing
+(the only realistic path to one) gates Public Trust certificates on
+geographic/entity eligibility that HUPI doesn't currently meet (see the
+main README's Distribution status section for the specifics). It's
+Windows-only; there's no macOS equivalent worth pursuing (the Mac App
+Store's sandboxing is quite restrictive for a full-featured editor with
+filesystem/process access needs — real VS Code itself isn't on it
+either, for the same reason).
 
 ## What's already done (this repo)
 
@@ -33,16 +37,14 @@ needs — real VS Code itself isn't on it either, for the same reason).
    `build/package-msix.sh` and in `AppxManifest.xml.template`'s
    `PublisherDisplayName` — public identifiers, not secrets, so
    committing them directly is fine.
-
-## What only a human can still do
-
-1. **A privacy policy URL** — Store submissions require one whenever the
-   app makes network calls, which HUPI Code does (to your own configured
-   gateway). Needs to live somewhere reachable, e.g. a page on hupi.dev.
-2. **The first submission itself** goes through the Partner Center web UI
-   by hand — screenshots, description, age rating questionnaire, the
-   privacy policy URL above, and the `.msix` from `package-msix.sh`.
-   Certification review is usually hours to a few days.
+3. ~~A privacy policy URL~~ — done; points at a page on hupi.dev.
+4. ~~The first submission~~ — went through the Partner Center web UI by
+   hand as of 2026-09-20 (screenshots, description, age rating
+   questionnaire, privacy policy URL, the `.msix` from
+   `package-msix.sh`, and a `runFullTrust` capability justification —
+   `runFullTrust` is required by the Desktop Bridge packaging pattern
+   itself, not something HUPI Code opted into). Was in Certification at
+   last check.
 
 ## Building the package
 
@@ -55,17 +57,31 @@ committed as the script's default — `MSIX_IDENTITY_NAME`/
 `MSIX_PUBLISHER` still override if the reservation is ever redone.
 
 Install it locally first to sanity-check before ever submitting — MSIX
-sideload installation needs either a trusted signing certificate (an
-Azure Trusted Signing profile, once that's set up for the direct-download
-channel, would work here too) or a self-signed test certificate installed
+sideload installation needs a self-signed test certificate installed
 into the local machine's Trusted People store (Windows-only, `New-
 SelfSignedCertificate` + `Add-AppxPackage` — this is strictly for local
 testing, never for the real Store submission, which Microsoft signs).
+There's no path to a trusted signing certificate of our own for this —
+see the main README's Distribution status section.
 
-## After the first manual submission
+## Automating further submissions
 
-Updates can be automated from CI via the Microsoft Store submission API
-(`StoreBroker` PowerShell module, or the newer Partner Center REST API +
-a GitHub Action like `isaacrlevin/windows-store-publish-action` or
-similar) — worth wiring into `.github/workflows/build.yml` once the app
-is actually live and updates are a recurring thing, not before.
+Done: `build/publish-store-submission.mjs` + the `workflow_dispatch`-only
+`.github/workflows/publish-store.yml` automate the update path (create
+submission → upload the `.msix` to the submission's Azure Blob SAS URL →
+commit → poll status), using the classic Microsoft Store submission API
+(`manage.devcenter.microsoft.com/v1.0`, *not* the newer
+`api.store.microsoft.com`, which is for hosted exe/msi installers
+referenced by URL rather than uploaded MSIX packages). One manual,
+one-time Partner Center step it can't do for you: associating a
+Microsoft Entra application with the account (**Account settings → User
+management → Microsoft Entra applications** tab → add/create one,
+assign it the **Manager** role, generate a key) to get the Tenant ID/
+Client ID/key that go into the `STORE_TENANT_ID`/`STORE_CLIENT_ID`/
+`STORE_CLIENT_SECRET` repo secrets (`STORE_APP_ID` is the Store ID shown
+on the app's **Product management → Product identity** page).
+
+Deliberately `workflow_dispatch`-only, never on push: a Store submission
+is a real, public, largely irreversible action once committed (Microsoft
+starts certification/publishing immediately), so it should never fire
+automatically off the back of a merge.

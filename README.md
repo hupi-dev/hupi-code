@@ -35,12 +35,8 @@ direction before reaching for another core patch.
 Linux, Windows, and macOS (arm64) all build in CI now — see
 [docs/BUILD.md](docs/BUILD.md). The macOS build is now code-signed and
 notarized with a real Apple Developer ID in CI (see the Phase 4 note
-below). Windows is still **unsigned**: real code signing needs a
-certificate this repo doesn't have wired in yet (in progress via Azure
-Trusted Signing). An unsigned build still runs fine; Windows just shows
-an "unknown publisher"-style warning on first launch until that's set
-up — this doesn't apply to the Microsoft Store channel, which Microsoft
-signs itself during certification (see below).
+below). The raw Windows build is **unsigned and not directly
+distributed** — see below for why.
 
 ## Distribution status (Phase 4)
 
@@ -52,26 +48,33 @@ wired into the `macos-arm64` CI job — signing reuses
 microsoft/vscode's own per-process entitlements/`@electron/osx-sign`
 pattern, see `build/darwin/`); this only runs for pushes to `main` and
 same-repo pull requests, since the signing secrets aren't available to
-fork PRs. Windows real code-signing is still blocked on an external
-credential only a human can obtain: a Windows code-signing certificate
-(in progress via Azure Trusted Signing — needs a validated Trusted
-Signing Account, a Public Trust certificate profile, and an Azure AD app
-registration granted the *Trusted Signing Certificate Profile Signer*
-role, wired into CI via Microsoft's
-[`trusted-signing-action`](https://github.com/Azure/trusted-signing-action)).
-Auto-update and an installer (Inno Setup on Windows, a signed DMG on
-macOS) are also still open — `product-overlay.json`'s `win32AppId`/
-`win32x64AppId`/etc. are real, valid GUIDs now (fixed from Phase 1's
-placeholders) so that work isn't blocked when it starts, but nothing
-uses them yet since only the raw binary folder is produced today.
+fork PRs.
 
-A separate Windows channel is also in progress: the **Microsoft Store**,
-which signs the package itself during certification — no code-signing
-certificate needed for that path. "HUPI Code" is reserved in Partner
-Center and `build/package-msix.sh` builds a real, correctly-identified
-`.msix` today — see [docs/MICROSOFT_STORE.md](docs/MICROSOFT_STORE.md)
-for what's left (a privacy policy URL, then the first submission, which
-has to go through Partner Center's web UI by hand).
+**Windows is Microsoft Store-only, deliberately** — not a temporary gap
+to be filled later. A real Windows code-signing certificate (needed for
+any direct-download `.msix`/`.exe` to install without being rejected
+outright) requires Azure Artifact Signing (formerly "Trusted Signing"),
+whose Public Trust certificates gate on real geographic/entity
+eligibility: an *individual* must be based in the US or Canada, and an
+*organization* needs a registered legal business entity in one of a
+specific list of countries (US, Canada, EU, UK, Australia, NZ, Japan,
+South Korea, Singapore, Switzerland, Norway, Israel) plus real business
+registration paperwork. Neither applies here, so this path is closed for
+now, not just unfinished. The Microsoft Store sidesteps this entirely —
+Microsoft signs the package itself during certification, no certificate
+of our own needed — which is why it's the only Windows channel:
+"HUPI Code" is reserved in Partner Center, `build/package-msix.sh`
+builds a real `.msix`, and `build/publish-store-submission.mjs` +
+`.github/workflows/publish-store.yml` automate submitting it (create
+submission, upload, commit, poll — see that workflow's own comments for
+why it's `workflow_dispatch`-only, never automatic). A first submission
+is already through Partner Center as of 2026-09-20 and was in
+Certification at last check.
+
+Auto-update and an installer (a signed DMG on macOS) are also still
+open — `product-overlay.json`'s `win32AppId`/`win32x64AppId`/etc. are
+real, valid GUIDs now (fixed from Phase 1's placeholders) so that work
+isn't blocked when it starts, but nothing uses them yet.
 
 ## Why this repo is small
 
