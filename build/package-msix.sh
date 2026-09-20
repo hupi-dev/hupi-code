@@ -45,9 +45,22 @@ sed \
   -e "s/@@VERSION@@/$MSIX_VERSION/" \
   "$SELF_DIR/resources/store/AppxManifest.xml.template" > "$STAGING/AppxManifest.xml"
 
+echo "==> locating makeappx.exe"
+# Same class of gap as signtool.exe in build.sh: makeappx.exe ships with
+# the Windows SDK, installed alongside Visual Studio on windows-latest,
+# but isn't on PATH by default. Searching for it here instead of
+# assuming it's already resolvable avoids repeating the exact mistake
+# the original signtool.exe invocation made.
+MAKEAPPX="$(find '/c/Program Files (x86)/Windows Kits/10/bin' -iname 'makeappx.exe' -path '*x64*' 2>/dev/null | sort -V | tail -1)"
+if [ -z "$MAKEAPPX" ]; then
+  echo "makeappx.exe not found under Windows Kits — is the Windows SDK installed?" >&2
+  exit 1
+fi
+echo "    found: $MAKEAPPX"
+
 echo "==> packing with makeappx.exe"
 mkdir -p "$(dirname "$OUT_MSIX")"
-makeappx.exe pack /d "$(cygpath -w "$STAGING" 2>/dev/null || echo "$STAGING")" \
+"$MAKEAPPX" pack /d "$(cygpath -w "$STAGING" 2>/dev/null || echo "$STAGING")" \
   /p "$(cygpath -w "$OUT_MSIX" 2>/dev/null || echo "$OUT_MSIX")" /o
 
 echo "MSIX package built: $OUT_MSIX"
