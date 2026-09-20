@@ -98,7 +98,21 @@ esac
 
 "${LAUNCH[@]}" > "$WORKDIR/run.log" 2>&1 &
 APP_PID=$!
-sleep 30
+
+# Poll for the probe's result file instead of a fixed sleep — a real
+# CI run showed Windows cold-starting noticeably slower than Linux/
+# macOS: a flat 30s sleep killed the extension host (SIGTERM, exit 143)
+# before it ever reached onStartupFinished, even though the app itself
+# had launched fine. Polling exits as soon as the probe fires (fast on
+# Linux/macOS, which have consistently finished well under 30s) while
+# still giving a slower cold start up to MAX_WAIT_SECS before giving up.
+MAX_WAIT_SECS=90
+for _ in $(seq 1 "$MAX_WAIT_SECS"); do
+  if [[ -f "$RESULT_FILE" ]]; then
+    break
+  fi
+  sleep 1
+done
 kill "$APP_PID" 2>/dev/null || true
 wait "$APP_PID" 2>/dev/null || true
 
