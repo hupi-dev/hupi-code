@@ -26,6 +26,25 @@ APP_DIR="${1:?usage: smoke-test.sh <path to VSCode-<platform>-<arch>>}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
 
+# The app we launch below is a native process for the current OS. On
+# Windows that means it's a real win32 binary that has no idea what a
+# Git-Bash/MSYS path (`/tmp/tmp.XXXX`, from `mktemp -d`) means — native
+# Node resolves such a path to `C:\tmp\tmp.XXXX` (root of the current
+# drive), NOT the real temp dir this script actually reads from. MSYS
+# auto-converts paths in *command arguments*, but NOT a path baked as a
+# string literal into a file (like the probe's extension.js below), so
+# that one has to be converted explicitly or the probe writes its result
+# somewhere this script never looks — indistinguishable from a startup
+# hang (the whole poll below just times out). `cygpath -m` yields a
+# mixed path (C:/Users/...) that native Node accepts as-is and, using
+# forward slashes, needs no backslash-escaping inside a JS string.
+to_native() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*) cygpath -m "$1" ;;
+    *) printf '%s' "$1" ;;
+  esac
+}
+
 # The packaged binary's location/name differs per OS. Linux uses
 # electron.ts's explicit linuxExecutableName: product.applicationName
 # ("hupi-code"). Darwin and win32 both instead go through
@@ -58,6 +77,10 @@ esac
 
 PROBE_DIR="$RESOURCES_DIR/extensions/zzz-smoke-test-probe"
 RESULT_FILE="$WORKDIR/probe-result.txt"
+# What the probe (running inside the native app) must write to so that it
+# lands at the same file this script polls for. On Linux/macOS this is
+# identical to RESULT_FILE; on Windows it's the mixed-path form.
+RESULT_FILE_NATIVE="$(to_native "$RESULT_FILE")"
 
 mkdir -p "$PROBE_DIR"
 cat > "$PROBE_DIR/package.json" <<EOF
@@ -75,7 +98,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 function activate() {
   const ids = vscode.extensions.all.map(e => e.id).sort();
-  fs.writeFileSync('$RESULT_FILE', ids.join('\n'));
+  fs.writeFileSync('$RESULT_FILE_NATIVE', ids.join('\n'));
 }
 module.exports = { activate };
 EOF
@@ -99,15 +122,14 @@ echo "==> launching to confirm it starts and loads the HUPI extension"
 # runs the whole app and waits for onStartupFinished, so something has to
 # kill it afterward regardless of OS — a portable background+sleep+kill
 # replaces `timeout` for that.
-# --verbose --log trace: two attempts at explaining a Windows-only hang
-# (right after "update#ctor", before the extension host ever starts) by
-# theorizing about the agent-host subsystem both turned out wrong — the
-# hang persisted identically even after disabling agent-host at both its
-# trigger point and its actual connection method. Rather than guess a
-# third time, get real data: trace-level logging should show what the
-# main process is actually doing (or waiting on) during the silent
-# window instead of nothing at all.
-LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --verbose --log trace --user-data-dir="$WORKDIR/user-data")
+# The "Windows-only hang right after update#ctor, before the extension
+# host starts" that earlier commits chased through the agent-host
+# subsystem was never a real hang: the probe *did* run, but wrote its
+# result to a Git-Bash path (`/tmp/...`) that native Windows Node
+# resolved to `C:\tmp\...` — nowhere this script polls — so the loop
+# below simply timed out every time. The RESULT_FILE_NATIVE conversion
+# above is the actual fix; keep the launch itself minimal.
+LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$(to_native "$WORKDIR/user-data")")
 case "$(uname -s)" in
   Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}") ;;
 esac
