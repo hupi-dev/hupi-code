@@ -142,3 +142,22 @@ installs (python.org, the Microsoft Store package) typically don't
 provide — only `python.exe`, not `python3.exe`, unlike Linux/macOS
 which normally have both. Fixed with a `command -v python3 || command
 -v python` fallback resolved once near the top of the script.
+
+## Apple `.p12` certificates must be exported in "legacy" PKCS12 format
+
+`security import` on the macOS CI runner failed every real signing
+attempt with `MAC verification failed during PKCS12 import (wrong
+password?)`, even after confirming byte-for-byte (decoded file size,
+password length) that the certificate and password both crossed from
+GitHub Secrets into the runner intact. The password was never wrong —
+`openssl pkcs12 -export` (no special flags) on OpenSSL 3.x defaults to
+AES-256-CBC encryption with a SHA-256 MAC, a format Apple's own
+Security framework's PKCS12 importer doesn't support and reports as
+this same misleading "wrong password" error rather than an "unsupported
+algorithm" one. The fix: re-export with `openssl pkcs12 -export
+-legacy ...` (OpenSSL 3.0+'s flag to fall back to the old
+pbeWithSHA1And40BitRC2-CBC / pbeWithSHA1And3-KeyTripleDES-CBC scheme,
+the one `security import` actually understands) — same key, same
+certificate, same password, only the container's own encryption changed.
+Worth remembering for any future Apple certificate this repo ever needs
+to re-issue or rotate.
