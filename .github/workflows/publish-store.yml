@@ -1,0 +1,50 @@
+name: publish to Microsoft Store
+
+# Deliberately workflow_dispatch-only, never on push/pull_request — a
+# Store submission is a real, public, hard-to-fully-reverse action
+# (once committed it goes into Microsoft's certification/publishing
+# pipeline), so this only ever runs when a human explicitly triggers it
+# from the Actions tab (or `gh workflow run publish-store.yml`), never
+# automatically off the back of a merge.
+#
+# Always publishes an MSIX from an existing, already-green build run —
+# it doesn't rebuild here, since packaging needs makeappx.exe (Windows
+# SDK, windows-latest only) and this job runs on ubuntu-latest, which
+# can't produce a win32 package at all.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'build workflow run ID to pull the hupi-code-msix artifact from'
+        required: true
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out hupi-code
+        uses: actions/checkout@v4
+        with:
+          path: hupi-code
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24.18.0'
+
+      - name: Download the MSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hupi-code-msix
+          path: msix-artifact
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.run_id }}
+
+      - name: Publish to the Microsoft Store
+        working-directory: hupi-code
+        env:
+          STORE_TENANT_ID: ${{ secrets.STORE_TENANT_ID }}
+          STORE_CLIENT_ID: ${{ secrets.STORE_CLIENT_ID }}
+          STORE_CLIENT_SECRET: ${{ secrets.STORE_CLIENT_SECRET }}
+          STORE_APP_ID: ${{ secrets.STORE_APP_ID }}
+        run: node build/publish-store-submission.mjs "${{ github.workspace }}/msix-artifact/hupi-code.msix"

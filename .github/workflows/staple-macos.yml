@@ -1,0 +1,51 @@
+name: staple pending macOS notarization
+
+# For the case notarize-macos.sh describes: a submission that was still
+# "In Progress" after that script's own bounded wait. Run this by hand
+# (Actions tab, or `gh workflow run staple-macos.yml -f run_id=... -f
+# submission_id=...`) once Apple has actually responded — check with
+# `xcrun notarytool info <submission-id> ...` locally, or just try this
+# workflow; it exits cleanly (non-zero, safe to ignore/retry) if Apple
+# still hasn't decided.
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'build workflow run ID that produced the signed (but not yet notarized) hupi-code-darwin-arm64 artifact'
+        required: true
+      submission_id:
+        description: 'notarization submission id, printed by notarize-macos.sh'
+        required: true
+
+jobs:
+  staple:
+    runs-on: macos-latest
+    steps:
+      - name: Check out hupi-code
+        uses: actions/checkout@v4
+        with:
+          path: hupi-code
+
+      - name: Download the signed app artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: hupi-code-darwin-arm64
+          path: app
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ inputs.run_id }}
+
+      - name: Staple if Apple has accepted it by now
+        working-directory: hupi-code
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: ./build/staple-macos.sh "${{ inputs.submission_id }}" "${{ github.workspace }}/app"
+
+      - name: Upload the stapled artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-darwin-arm64
+          path: app
+          retention-days: 7
+          overwrite: true
