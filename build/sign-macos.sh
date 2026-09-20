@@ -32,6 +32,7 @@ KEYCHAIN="$SCRATCH/hupi-code-build.keychain"
 cleanup() {
   security delete-keychain "$KEYCHAIN" 2>/dev/null || true
   rm -rf "$SCRATCH"
+  rm -rf "$SELF_DIR/darwin/node_modules" "$SELF_DIR/darwin/package.json" "$SELF_DIR/darwin/package-lock.json"
 }
 trap cleanup EXIT
 
@@ -78,10 +79,15 @@ fi
 echo "    identity: $IDENTITY"
 
 echo "==> installing @electron/osx-sign (same major VS Code's own build pins: ^2.0.0)"
-npm install --silent --no-save --prefix "$SCRATCH" '@electron/osx-sign@^2.0.0'
+# Installed as a sibling of sign.mjs (not into $SCRATCH) on purpose:
+# Node's ESM resolver — unlike CommonJS require() — ignores NODE_PATH
+# entirely, so `import { sign } from '@electron/osx-sign'` only resolves
+# via a real node_modules directory found by walking up from the
+# importing file's own location. Removed again in cleanup() above.
+npm install --silent --no-save --prefix "$SELF_DIR/darwin" '@electron/osx-sign@^2.0.0'
 
 echo "==> signing $APP_DIR"
-NODE_PATH="$SCRATCH/node_modules" node "$SELF_DIR/darwin/sign.mjs" "$APP_DIR" "$IDENTITY" "$KEYCHAIN"
+node "$SELF_DIR/darwin/sign.mjs" "$APP_DIR" "$IDENTITY" "$KEYCHAIN"
 
 APP_BUNDLE="$(find "$APP_DIR" -maxdepth 1 -iname '*.app')"
 echo "==> verifying the signature"

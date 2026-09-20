@@ -1,2 +1,6 @@
 out/
 *.log
+# sign-macos.sh installs @electron/osx-sign as a sibling of sign.mjs
+# (Node's ESM resolver ignores NODE_PATH) and removes it again in its
+# own cleanup trap — this is a backstop for an unclean interruption.
+node_modules/
