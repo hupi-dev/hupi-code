@@ -39,7 +39,9 @@ trap 'rm -rf "$SCRATCH"' EXIT
 
 echo "==> decoding the App Store Connect API key"
 KEY_PATH="$SCRATCH/AuthKey_${APPLE_API_KEY_ID}.p8"
-echo "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$KEY_PATH"
+# -D (not the GNU-only --decode) is what macOS's own /usr/bin/base64
+# documents.
+printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 -D > "$KEY_PATH"
 
 echo "==> zipping $APP_BUNDLE for submission"
 # notarytool only accepts a zip/dmg/pkg for submission, never a raw .app

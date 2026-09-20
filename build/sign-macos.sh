@@ -36,7 +36,12 @@ cleanup() {
 trap cleanup EXIT
 
 echo "==> decoding the Developer ID Application certificate"
-echo "$APPLE_CERTIFICATE_P12_BASE64" | base64 --decode > "$SCRATCH/cert.p12"
+# -D (not the GNU-only --decode) is the flag macOS's own /usr/bin/base64
+# actually documents — this script only ever runs on Darwin (guarded
+# above), so there's no need to support GNU coreutils' flag spelling too.
+printf '%s' "$APPLE_CERTIFICATE_P12_BASE64" | base64 -D > "$SCRATCH/cert.p12"
+echo "    decoded p12 size: $(wc -c < "$SCRATCH/cert.p12" | tr -d ' ') bytes"
+echo "    password length: ${#APPLE_CERTIFICATE_PASSWORD} chars"
 
 echo "==> creating a temporary keychain for CI signing"
 # A dedicated, throwaway keychain (rather than importing into the
