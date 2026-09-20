@@ -60,7 +60,16 @@ echo "    found: $MAKEAPPX"
 
 echo "==> packing with makeappx.exe"
 mkdir -p "$(dirname "$OUT_MSIX")"
-"$MAKEAPPX" pack /d "$(cygpath -w "$STAGING" 2>/dev/null || echo "$STAGING")" \
+# MSYS_NO_PATHCONV=1: Git Bash auto-converts any argument that looks
+# like a POSIX path into a Windows one before exec'ing a native binary —
+# a real, well-known gotcha for native Windows CLI tools using /flag
+# syntax (not Unix -x/--flag). Without this, Git Bash sees the `/d`
+# flag itself, mistakes it for "root of the D: drive", and silently
+# rewrites it to `D:/` before makeappx.exe ever sees it — which is
+# exactly what happened on a real CI run ("Unknown command line option:
+# \"D:/\"", makeappx.exe's own complaint about receiving that instead
+# of the flag it expected).
+MSYS_NO_PATHCONV=1 "$MAKEAPPX" pack /d "$(cygpath -w "$STAGING" 2>/dev/null || echo "$STAGING")" \
   /p "$(cygpath -w "$OUT_MSIX" 2>/dev/null || echo "$OUT_MSIX")" /o
 
 echo "MSIX package built: $OUT_MSIX"
