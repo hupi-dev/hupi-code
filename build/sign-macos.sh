@@ -78,6 +78,18 @@ if [ -z "$IDENTITY" ]; then
 fi
 echo "    identity: $IDENTITY"
 
+APP_BUNDLE="$(find "$APP_DIR" -maxdepth 1 -iname '*.app')"
+
+echo "==> stripping extended attributes"
+# Electron's own signing guide calls this out directly: leftover xattrs
+# from however the Electron/VS Code binaries were downloaded and
+# extracted (com.apple.provenance, resource forks, etc.) are a known
+# cause of codesign misjudging a nested bundle's type — hit here as
+# "bundle format is ambiguous (could be app or framework)" on
+# Electron Framework.framework's inner binary, the first nested
+# framework actually reached during signing.
+xattr -cr "$APP_BUNDLE"
+
 echo "==> installing @electron/osx-sign (same major VS Code's own build pins: ^2.0.0)"
 # Installed as a sibling of sign.mjs (not into $SCRATCH) on purpose:
 # Node's ESM resolver — unlike CommonJS require() — ignores NODE_PATH
@@ -89,7 +101,6 @@ npm install --silent --no-save --prefix "$SELF_DIR/darwin" '@electron/osx-sign@^
 echo "==> signing $APP_DIR"
 node "$SELF_DIR/darwin/sign.mjs" "$APP_DIR" "$IDENTITY" "$KEYCHAIN"
 
-APP_BUNDLE="$(find "$APP_DIR" -maxdepth 1 -iname '*.app')"
 echo "==> verifying the signature"
 codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
 
