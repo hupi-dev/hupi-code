@@ -72,6 +72,20 @@ case "$(uname -m)" in
     exit 1
     ;;
 esac
+
+# Native Windows Python installs (python.org, the Microsoft Store package)
+# typically only provide python.exe, not python3.exe — unlike Linux/macOS,
+# which normally have both. A real gap, not hypothetical: hit immediately
+# on a first local Windows build attempt ("python3: command not found").
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "python3 (or python) not found on PATH — required for JSON merging steps below" >&2
+  exit 1
+fi
+
 # Matches microsoft/vscode's own BUILD_TARGETS naming exactly
 # (build/gulpfile.vscode.ts) — the gulp task name and the output folder
 # name it produces both follow this same `<platform>-<arch>` pattern.
@@ -125,7 +139,7 @@ done
 shopt -u nullglob
 
 echo "==> overlaying product.json"
-python3 - "$WORKDIR/product.json" "$SELF_DIR/product-overlay.json" <<'PYEOF'
+$PYTHON - "$WORKDIR/product.json" "$SELF_DIR/product-overlay.json" <<'PYEOF'
 import json, sys
 product_path, overlay_path = sys.argv[1], sys.argv[2]
 with open(product_path) as f:
@@ -162,7 +176,7 @@ cp -r "$HUPI_EXTENSION_DIR"/dist "$HUPI_EXTENSION_DIR"/package.json \
 # "missing: marked, openai" even though nothing is actually missing at
 # runtime. A pre-bundled built-in extension shouldn't declare
 # dependencies its bundle doesn't need installed separately.
-python3 - "$BUILTIN_DIR/package.json" <<'PYEOF'
+$PYTHON - "$BUILTIN_DIR/package.json" <<'PYEOF'
 import json, sys
 path = sys.argv[1]
 with open(path) as f:

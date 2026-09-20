@@ -88,44 +88,57 @@ Copilot access, not a general on/off switch — reaching for it here
 would have been a bigger, less legible change for the same outcome a
 small content patch already gets cleanly.
 
-`patches/0003-disable-local-agent-host.patch` — found via two rounds of
-real, reproducible Windows CI failures, not proactively. Microsoft's own
-"local agent-host" infrastructure (the utility process backing
-Claude Agent/Codex Agent/Copilot CLI integrations) hangs indefinitely
-during its own startup on this Windows CI image — visible in the app's
-log as either `AgentHostProcessManager: agent host started` (round 1)
-or nothing at all past normal window init (round 2) followed by total
-silence — no extension host, no window — until the smoke test's own
-timeout killed it. Linux and macOS were unaffected both times. HUPI
-Code doesn't use any of this infrastructure, so disabling it outright
-is a strict win independent of the Windows hang.
+## A misdiagnosis worth recording: there was no Windows hang
 
-Two call sites needed disabling, found by tracing the actual chain
-rather than guessing:
-- `AgentHostPrewarmContribution`
-  (`src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts`,
-  registered at `WorkbenchPhase.BlockRestore`, an early/eager lifecycle
-  phase) unconditionally calls `agentHostService.startAgentHost()` on
-  every desktop window once `agentHostEnablementService.enabled` reads
-  true — Microsoft's own "prewarm the local agent-host utility process
-  for instant chat" optimization. Disabling just this (commenting out
-  its one `registerWorkbenchContribution2(...)` call) fixed the first
-  failure, but a second Windows CI run still hung — no
-  `AgentHostProcessManager` log line that time, ruling this
-  specific contribution out, but some other consumer of
-  `IAgentHostService` (this file registers several —
-  `AgentHostTerminalContribution`, `AgentHostSessionListContribution`,
-  etc., all in `agentHost.contribution.ts`) still reached the same
-  underlying connection logic.
-- `LocalAgentHostServiceClient.startAgentHost()`
-  (`src/vs/platform/agentHost/electron-browser/localAgentHostService.ts`)
-  is the actual connection choke point every one of those consumers
-  ultimately funnels through. Rather than chase down every possible
-  caller individually, the patch no-ops this method directly — nothing
-  legitimately needs it to ever connect, so this is the more robust fix
-  regardless of which contribution reaches it.
+Several windows-x64 CI runs failed with the smoke test reporting
+"probe never activated — app likely failed to start", which looked
+exactly like the app hanging partway through startup (real log output
+stopped right after `update#ctor`, then nothing until the smoke test's
+own timeout). Two rounds of patches went out against that theory —
+disabling `AgentHostPrewarmContribution` (an eager "prewarm the local
+agent-host utility process" optimization in
+`src/vs/workbench/services/agentHost/electron-browser/agentHostService.ts`),
+then also no-oping `LocalAgentHostServiceClient.startAgentHost()`
+(`src/vs/platform/agentHost/electron-browser/localAgentHostService.ts`)
+when the first one didn't fix it — plus adding `--verbose --log trace`
+to try to see what the "hung" process was doing. None of it changed
+the outcome, which in hindsight was the actual signal that the theory
+was wrong, not that the fix needed to be more aggressive.
 
-Verified locally (a full Linux rebuild + smoke test) before pushing
-each round, given the cost of a Windows CI round-trip: the patch
-applies cleanly against a fresh 1.137.0 clone, compiles, and the app
-still starts and loads `hupi.hupi-vscode` correctly.
+**The real bug was in `build/smoke-test.sh` itself, not the app.** The
+probe extension's result-file path is baked as a JS string literal into
+`extension.js`, generated from `$RESULT_FILE` (built from `mktemp -d`,
+a Git-Bash/MSYS path like `/tmp/tmp.XXXX/probe-result.txt`). That
+string is evaluated by the *native* win32 Electron/Node process, which
+has no notion of MSYS path translation — a leading `/` resolves as
+"root of the current drive", so the probe wrote to
+`C:\tmp\tmp.XXXX\probe-result.txt` while bash's own `-f` checks
+(correctly MSYS-translated, since those run in bash itself) polled the
+real temp directory under `C:\Users\...\AppData\Local\Temp\...`. The
+two never matched, so the poll always timed out — indistinguishable
+from a real hang from bash's side, even though the app was very
+possibly finishing startup and loading the extension correctly the
+whole time. This also explains why `--verbose --log trace` showed
+nothing new: there was nothing wrong to show.
+
+Found by a human running the build interactively on a real Windows
+machine instead of iterating on CI logs — worth remembering as a
+general lesson: a verification script failing doesn't always mean the
+thing it's verifying is broken.
+
+The fix: `smoke-test.sh` now converts the result-file path via
+`cygpath -m` (Git Bash only, a no-op elsewhere) before embedding it —
+a real Windows path using forward slashes, valid as a JS string literal
+with no backslash-escaping to get wrong, and understood natively by
+Node on Windows. The two agent-host patches were reverted (no bug for
+them to fix) and `--verbose --log trace` was removed — this project's
+own stated policy is one deliberate core patch at a time with a real
+justification, not speculative ones left in place after the reasoning
+behind them turns out to be wrong.
+
+A second, unrelated portability gap surfaced by the same local-Windows
+testing: `build.sh` hardcoded `python3`, which native Windows Python
+installs (python.org, the Microsoft Store package) typically don't
+provide — only `python.exe`, not `python3.exe`, unlike Linux/macOS
+which normally have both. Fixed with a `command -v python3 || command
+-v python` fallback resolved once near the top of the script.

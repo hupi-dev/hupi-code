@@ -59,6 +59,29 @@ esac
 PROBE_DIR="$RESOURCES_DIR/extensions/zzz-smoke-test-probe"
 RESULT_FILE="$WORKDIR/probe-result.txt"
 
+# THE ACTUAL BUG behind every "Windows hang" this session chased (agent-
+# host patches, the poll-vs-sleep rewrite, --verbose --log trace — none
+# of it was wrong to have, but none of it was the cause either): this
+# result-file path gets baked as a JS string literal into the probe
+# below, which is evaluated by the *native* win32 Electron/Node process,
+# not bash — it has no notion of Git Bash's MSYS path translation. A
+# bash-side `/tmp/tmp.XXXX/...` path (from mktemp -d) means something
+# different to bash (correctly translated for its own `-f` tests further
+# down) than it does to that native Node process, which resolves a
+# leading `/` as "root of the current drive" — so the probe actually
+# wrote to `C:\tmp\tmp.XXXX\...` while bash polled the real temp dir
+# under `C:\Users\...\AppData\Local\Temp\...`. They never matched, so
+# the 90s poll always timed out — indistinguishable from a real hang
+# from bash's side, since the app was very possibly working the whole
+# time. `cygpath -m` (Git Bash only; a no-op elsewhere) converts to a
+# real Windows path using forward slashes — valid as a JS string literal
+# with no backslash-escaping to get wrong, and understood natively by
+# Node on Windows.
+RESULT_FILE_FOR_JS="$RESULT_FILE"
+if command -v cygpath >/dev/null 2>&1; then
+  RESULT_FILE_FOR_JS="$(cygpath -m "$RESULT_FILE")"
+fi
+
 mkdir -p "$PROBE_DIR"
 cat > "$PROBE_DIR/package.json" <<EOF
 {
@@ -75,7 +98,7 @@ const vscode = require('vscode');
 const fs = require('fs');
 function activate() {
   const ids = vscode.extensions.all.map(e => e.id).sort();
-  fs.writeFileSync('$RESULT_FILE', ids.join('\n'));
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n'));
 }
 module.exports = { activate };
 EOF
@@ -99,15 +122,7 @@ echo "==> launching to confirm it starts and loads the HUPI extension"
 # runs the whole app and waits for onStartupFinished, so something has to
 # kill it afterward regardless of OS — a portable background+sleep+kill
 # replaces `timeout` for that.
-# --verbose --log trace: two attempts at explaining a Windows-only hang
-# (right after "update#ctor", before the extension host ever starts) by
-# theorizing about the agent-host subsystem both turned out wrong — the
-# hang persisted identically even after disabling agent-host at both its
-# trigger point and its actual connection method. Rather than guess a
-# third time, get real data: trace-level logging should show what the
-# main process is actually doing (or waiting on) during the silent
-# window instead of nothing at all.
-LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --verbose --log trace --user-data-dir="$WORKDIR/user-data")
+LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$WORKDIR/user-data")
 case "$(uname -s)" in
   Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}") ;;
 esac
