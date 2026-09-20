@@ -256,6 +256,14 @@ echo "==> building $GULP_TASK"
 ( cd "$WORKDIR" && NODE_OPTIONS="--max-old-space-size=8192" npm run gulp "$GULP_TASK" )
 
 echo "==> copying build output to $OUT_DIR"
-cp -r "$WORKROOT/$DEST_FOLDER" "$OUT_DIR/"
+# -a (archive mode: recurse, preserve symlinks/permissions/timestamps),
+# not just -r, matters specifically on darwin: Electron's own framework
+# bundle relies on a Versions/Current symlink chain (the top-level
+# "Electron Framework" binary and "Resources" dir are supposed to be
+# symlinks into Versions/Current/, not real files) — codesign later
+# fails with "bundle format is ambiguous (could be app or framework)"
+# on a framework whose symlinks got silently dereferenced into real
+# file copies by a plain, non-archive-mode copy.
+cp -a "$WORKROOT/$DEST_FOLDER" "$OUT_DIR/"
 
 echo "HUPI Code built: $OUT_DIR/$DEST_FOLDER"
