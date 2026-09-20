@@ -24,7 +24,7 @@ set -euo pipefail
 
 APP_DIR="${1:?usage: smoke-test.sh <path to VSCode-<platform>-<arch>>}"
 WORKDIR="$(mktemp -d)"
-trap 'rm -rf "$WORKDIR"' EXIT
+trap 'rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
 
 # The packaged binary's location/name differs per OS. Linux uses
 # electron.ts's explicit linuxExecutableName: product.applicationName
@@ -80,8 +80,16 @@ function activate() {
 module.exports = { activate };
 EOF
 
-cleanup_probe() { rm -rf "$PROBE_DIR"; }
-trap 'cleanup_probe; rm -rf "$WORKDIR"' EXIT
+cleanup_probe() { rm -rf "$PROBE_DIR" 2>/dev/null || true; }
+# Best-effort cleanup, not a correctness check — `kill "$APP_PID"` below
+# only signals the top-level Electron process, not its whole subprocess
+# tree (renderer/GPU/extension host), so a file under $WORKDIR/user-data
+# can still be open for a moment after. A real run hit exactly this:
+# the actual verification passed, but `rm -rf` on a not-yet-released
+# file made the *cleanup* fail, which — combined with `set -e` — turned
+# a passing smoke test into a false failure. `|| true` here ensures only
+# the actual pass/fail checks below ever set the script's exit code.
+trap 'cleanup_probe; rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
 
 echo "==> launching to confirm it starts and loads the HUPI extension"
 # Linux CI runners have no display at all, hence xvfb; Windows/macOS
