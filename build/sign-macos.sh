@@ -80,6 +80,16 @@ echo "    identity: $IDENTITY"
 
 APP_BUNDLE="$(find "$APP_DIR" -maxdepth 1 -iname '*.app')"
 
+echo "==> DEBUG: Electron Framework.framework layout before signing"
+# "bundle format is ambiguous (could be app or framework)" on this exact
+# framework is a well-documented Electron signing issue, consistently
+# traced to the framework's Versions/Current symlink chain having been
+# flattened into real file copies somewhere upstream (the framework's
+# top-level "Electron Framework" binary and "Resources" are supposed to
+# be symlinks into Versions/Current/, not actual files) — checking this
+# directly instead of guessing further at which build step did it.
+find "$APP_BUNDLE/Contents/Frameworks/Electron Framework.framework" -maxdepth 3 -exec ls -la {} \; || true
+
 echo "==> stripping extended attributes"
 # Electron's own signing guide calls this out directly: leftover xattrs
 # from however the Electron/VS Code binaries were downloaded and
