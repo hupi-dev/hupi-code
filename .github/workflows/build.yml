@@ -9,6 +9,10 @@ on:
 jobs:
   linux-x64:
     runs-on: ubuntu-latest
+    # Needed to create/update the "latest" GitHub Release below —
+    # GITHUB_TOKEN defaults to read-only content access on this repo.
+    permissions:
+      contents: write
     steps:
       - name: Check out hupi-code
         uses: actions/checkout@v4
@@ -60,19 +64,50 @@ jobs:
           path: out/VSCode-linux-x64
           retention-days: 7
 
-  # Windows and macOS builds are unsigned — real code signing needs
-  # credentials this repo doesn't have wired in yet (a Windows
-  # certificate via Azure Trusted Signing, an Apple Developer ID +
-  # notarization). Unsigned builds still run fine; the OS will show an
-  # "unknown publisher"-style warning on first launch until that's set
-  # up. See docs/UPSTREAM_UPGRADES.md and the main README's Phase 4 note.
-  #
-  # Both jobs are new and unlike linux-x64 (hardened through several real
-  # build failures caught by actually running it) haven't been validated
-  # against a real build yet — build.sh/smoke-test.sh's win32/darwin
-  # paths were written by reasoning through microsoft/vscode's own build
-  # source, not by running them. Treat the first real failures here as
-  # expected, not a sign the whole approach is wrong.
+      - name: Package tarball
+        run: |
+          tar -czf "${{ github.workspace }}/out/hupi-code-linux-x64.tar.gz" \
+            -C "${{ github.workspace }}/out" VSCode-linux-x64
+
+      # A GitHub Release (not the build artifact above) is the actual
+      # public download hupi.dev's /downloads page links to — build
+      # artifacts require a GitHub login and expire after 7 days, so
+      # they're fine for CI-to-CI or manual debugging but not real
+      # distribution. No versioning scheme of hupi-code's own exists yet
+      # (UPSTREAM_TAG isn't it — that's microsoft/vscode's version, not
+      # this repo's), so this publishes a single rolling "latest"
+      # release, updated on every push to main, rather than a numbered
+      # one — the same "always current HEAD" model build.yml's own CI
+      # already follows for everything else. Not run for pull_request
+      # events: a PR build shouldn't overwrite the public download.
+      - name: Publish to the "latest" release
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deliberately NOT --prerelease: GitHub's own "latest release"
+          # resolution (which /releases/latest/download/<file> URLs
+          # depend on) explicitly excludes prereleases and drafts — a
+          # release marked --prerelease would make those stable-looking
+          # download URLs 404 forever, since there'd be no non-prerelease
+          # release for "latest" to ever resolve to.
+          gh release view latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create latest --repo "${{ github.repository }}" \
+              --title "Latest build" \
+              --notes "Automatically updated on every push to main — not a stable numbered release, just the build closest to HEAD. Linux and macOS only; Windows ships via the Microsoft Store (see docs/MICROSOFT_STORE.md)." || true
+          gh release edit latest --repo "${{ github.repository }}" \
+            --notes "Automatically updated on every push to main (currently ${{ github.sha }}) — not a stable numbered release, just the build closest to HEAD. Linux and macOS only; Windows ships via the Microsoft Store (see docs/MICROSOFT_STORE.md)."
+          gh release upload latest --repo "${{ github.repository }}" --clobber \
+            "${{ github.workspace }}/out/hupi-code-linux-x64.tar.gz"
+
+  # The raw win32 build itself stays unsigned on purpose — Windows
+  # distribution is Microsoft Store-only, not a direct download, since
+  # there's no realistic path to a Windows code-signing certificate of
+  # our own right now (see the main README's Distribution status
+  # section for why Azure Artifact Signing's eligibility requirements
+  # rule this out). The .msix built below exists to keep a ready-to-test
+  # package available on every push, not as something this repo
+  # publishes for direct install.
   windows-x64:
     runs-on: windows-latest
     steps:
@@ -183,6 +218,10 @@ jobs:
 
   macos-arm64:
     runs-on: macos-latest
+    # Needed to create/update the "latest" GitHub Release below —
+    # GITHUB_TOKEN defaults to read-only content access on this repo.
+    permissions:
+      contents: write
     steps:
       - name: Check out hupi-code
         uses: actions/checkout@v4
@@ -248,3 +287,54 @@ jobs:
           name: hupi-code-darwin-arm64
           path: out/VSCode-darwin-arm64
           retention-days: 7
+
+      # notarize-macos.sh can legitimately exit 0 without having stapled
+      # anything (Apple's queue was still "In Progress" past its own
+      # bounded wait — see that script's own comments for why it doesn't
+      # block on this unbounded). Checking the app itself for a valid
+      # ticket, rather than trusting that step's exit code, is the only
+      # way to know for sure whether this build is actually safe to
+      # publish as a real download.
+      - name: Check whether the notarization ticket actually stapled
+        id: staple_check
+        if: steps.apple_creds.outputs.available == 'true'
+        run: |
+          if xcrun stapler validate "${{ github.workspace }}/out/VSCode-darwin-arm64/HUPI Code.app"; then
+            echo "stapled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "stapled=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Package zip
+        if: steps.staple_check.outputs.stapled == 'true'
+        run: |
+          ditto -c -k --keepParent \
+            "${{ github.workspace }}/out/VSCode-darwin-arm64/HUPI Code.app" \
+            "${{ github.workspace }}/out/hupi-code-darwin-arm64.zip"
+
+      # Same "latest" rolling release the linux-x64 job publishes to —
+      # see that job's own comment for why (no versioning scheme of
+      # hupi-code's own yet, GitHub Releases over build artifacts for a
+      # durable public download). Gated on staple_check so an
+      # unnotarized build never gets published as a real download — one
+      # that's merely signed but not notarized would still trip
+      # Gatekeeper on any Mac other than the one that built it.
+      - name: Publish to the "latest" release
+        if: steps.staple_check.outputs.stapled == 'true' && github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Deliberately NOT --prerelease: GitHub's own "latest release"
+          # resolution (which /releases/latest/download/<file> URLs
+          # depend on) explicitly excludes prereleases and drafts — a
+          # release marked --prerelease would make those stable-looking
+          # download URLs 404 forever, since there'd be no non-prerelease
+          # release for "latest" to ever resolve to.
+          gh release view latest --repo "${{ github.repository }}" >/dev/null 2>&1 || \
+            gh release create latest --repo "${{ github.repository }}" \
+              --title "Latest build" \
+              --notes "Automatically updated on every push to main — not a stable numbered release, just the build closest to HEAD. Linux and macOS only; Windows ships via the Microsoft Store (see docs/MICROSOFT_STORE.md)." || true
+          gh release edit latest --repo "${{ github.repository }}" \
+            --notes "Automatically updated on every push to main (currently ${{ github.sha }}) — not a stable numbered release, just the build closest to HEAD. Linux and macOS only; Windows ships via the Microsoft Store (see docs/MICROSOFT_STORE.md)."
+          gh release upload latest --repo "${{ github.repository }}" --clobber \
+            "${{ github.workspace }}/out/hupi-code-darwin-arm64.zip"

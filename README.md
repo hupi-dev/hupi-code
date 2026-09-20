@@ -40,15 +40,23 @@ distributed** — see below for why.
 
 ## Distribution status (Phase 4)
 
-Every push builds and smoke-tests all three platforms in CI, uploaded as
-build artifacts — there's no download page or release process yet.
-macOS is signed with a real Apple Developer ID Application certificate
-and notarized (`build/sign-macos.sh` and `build/notarize-macos.sh`,
-wired into the `macos-arm64` CI job — signing reuses
-microsoft/vscode's own per-process entitlements/`@electron/osx-sign`
-pattern, see `build/darwin/`); this only runs for pushes to `main` and
-same-repo pull requests, since the signing secrets aren't available to
-fork PRs.
+Every push builds and smoke-tests all three platforms in CI. Linux and
+macOS additionally publish to a rolling **"latest" GitHub Release** —
+not a numbered version (this repo has no versioning scheme of its own
+yet), just the build closest to `main`'s HEAD, updated on every push:
+[hupi.dev/downloads](https://hupi.dev/downloads) links directly to
+these. macOS is signed with a real Apple Developer ID Application
+certificate and notarized (`build/sign-macos.sh` and
+`build/notarize-macos.sh`, wired into the `macos-arm64` CI job — signing
+reuses microsoft/vscode's own per-process entitlements/
+`@electron/osx-sign` pattern, see `build/darwin/`); the release publish
+step re-checks `xcrun stapler validate` itself rather than trusting
+`notarize-macos.sh`'s own exit code, so a build only reaches the public
+"latest" release once notarization has actually finished (see that
+script's own comments on why it can legitimately exit 0 without having
+stapled anything yet). Signing/notarizing/releasing only runs for
+pushes to `main` and same-repo pull requests, since the required
+secrets aren't available to fork PRs.
 
 **Windows is Microsoft Store-only, deliberately** — not a temporary gap
 to be filled later. A real Windows code-signing certificate (needed for
@@ -71,10 +79,11 @@ why it's `workflow_dispatch`-only, never automatic). A first submission
 is already through Partner Center as of 2026-09-20 and was in
 Certification at last check.
 
-Auto-update and an installer (a signed DMG on macOS) are also still
-open — `product-overlay.json`'s `win32AppId`/`win32x64AppId`/etc. are
-real, valid GUIDs now (fixed from Phase 1's placeholders) so that work
-isn't blocked when it starts, but nothing uses them yet.
+Auto-update and a nicer macOS installer (a signed DMG instead of the
+current plain `.zip` of the notarized `.app`) are still open —
+`product-overlay.json`'s `win32AppId`/`win32x64AppId`/etc. are real,
+valid GUIDs now (fixed from Phase 1's placeholders) so that work isn't
+blocked when it starts, but nothing uses them yet.
 
 ## Why this repo is small
 
