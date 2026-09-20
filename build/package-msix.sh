@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Wraps an already-built VSCode-win32-x64 folder (from build.sh) into an
 # MSIX package for Microsoft Store submission, using the "Desktop Bridge"
-# pattern — hupi-code.exe runs unmodified, no UWP rewrite needed.
+# pattern — "HUPI Code.exe" runs unmodified, no UWP rewrite needed.
 #
 # "HUPI Code" is reserved in Microsoft Partner Center as of 2026-09-19 —
 # MSIX_IDENTITY_NAME/MSIX_PUBLISHER below default to the real values from

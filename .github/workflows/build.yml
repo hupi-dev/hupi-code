@@ -97,11 +97,43 @@ jobs:
           # equivalent of the Linux job's nvm install/use for this OS.
           node-version: '24.18.0'
 
+      # Windows Defender's real-time scanning is the single biggest known
+      # cause of Windows CI being much slower than Linux/macOS for
+      # Node-heavy builds — it scans every file synchronously as npm ci
+      # writes tens of thousands of them into node_modules. Excluding the
+      # whole workspace (which WORKROOT below is pinned under, so this
+      # one exclusion also covers the actual npm ci working directory,
+      # not just the checkout) is the standard, well-documented fix.
+      - name: Exclude workspace from Windows Defender
+        shell: pwsh
+        run: Add-MpPreference -ExclusionPath "${{ github.workspace }}"
+
+      # npm's global cache (~/AppData/Local/npm-cache) holds downloaded
+      # package tarballs keyed by content hash, shared across whatever
+      # project npm ci runs against — caching it means repeat runs with
+      # an unchanged UPSTREAM_TAG skip re-downloading ~1600 packages from
+      # the registry, even though npm ci still re-extracts/re-links
+      # node_modules fresh each time (this doesn't cache native-module
+      # compilation itself, just the download step). A cache miss is
+      # harmless — restore/save just no-ops, never fails the build.
+      - name: Cache npm global cache
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\npm-cache
+          key: npm-win32-${{ hashFiles('hupi-code/UPSTREAM_TAG') }}
+          restore-keys: |
+            npm-win32-
+
       - name: Build HUPI Code
         shell: bash
         working-directory: hupi-code
         env:
           HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+          # Pinned under github.workspace (rather than build.sh's default
+          # mktemp -d, which would land somewhere under the system temp
+          # dir) so the single Defender exclusion above actually covers
+          # where npm ci does its work.
+          WORKROOT: ${{ github.workspace }}/workroot
           # VS Code 1.137.0's own preinstall.ts only recognizes VS2022/2019
           # (hardcoded supportedVersions in build/npm/preinstall.ts) and
           # looks for Program Files\Microsoft Visual Studio\<2022|2019>\

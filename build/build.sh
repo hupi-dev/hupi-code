@@ -82,6 +82,11 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM_TAG="$(cat "$SELF_DIR/UPSTREAM_TAG")"
 HUPI_EXTENSION_DIR="${HUPI_EXTENSION_DIR:-$SELF_DIR/../hupi/vscode-extension}"
 WORKROOT="${WORKROOT:-$(mktemp -d)}"
+# mktemp -d always creates the directory; an externally-set WORKROOT
+# (e.g. CI pinning it under a Defender-exclusion path) might not exist
+# yet — git clone only creates the final leaf directory, not
+# multi-level parents, so this is needed either way.
+mkdir -p "$WORKROOT"
 
 mkdir -p "${OUT_DIR:-./out}"
 OUT_DIR="$(cd "${OUT_DIR:-./out}" && pwd)"

@@ -26,13 +26,17 @@ APP_DIR="${1:?usage: smoke-test.sh <path to VSCode-<platform>-<arch>>}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 
-# The packaged binary's location/name differs per OS — see electron.ts's
-# linuxExecutableName/darwinExecutable (both set from product.json's
-# applicationName/nameShort) for where these come from. Only the Linux
-# path has been confirmed against a real build; the win32/darwin paths
-# are inferred from microsoft/vscode's own build source and haven't run
-# against a real build yet — expect the first real CI run on those two
-# to need a fix here if the inference is off.
+# The packaged binary's location/name differs per OS. Linux uses
+# electron.ts's explicit linuxExecutableName: product.applicationName
+# ("hupi-code"). Darwin and win32 both instead go through
+# @vscode/gulp-electron's own packaging (build/gulpfile.vscode.ts sets
+# packageJsonUpdates.name = product.nameShort, "HUPI Code" (with a
+# space); that flows into the packaged app's package.json, which
+# @vscode/gulp-electron's index.js reads as opts.productName, and
+# win32.js's renameApp() renames the root .exe to `${productName}.exe`
+# — confirmed by inspecting that package's actual source, not guessed,
+# after a first win32 smoke-test attempt failed looking for
+# "hupi-code.exe" instead of the real "HUPI Code.exe").
 case "$(uname -s)" in
   Linux*)
     APP_BIN="$APP_DIR/hupi-code"
@@ -43,7 +47,7 @@ case "$(uname -s)" in
     RESOURCES_DIR="$APP_DIR/HUPI Code.app/Contents/Resources/app"
     ;;
   MINGW*|MSYS*|CYGWIN*)
-    APP_BIN="$APP_DIR/hupi-code.exe"
+    APP_BIN="$APP_DIR/HUPI Code.exe"
     RESOURCES_DIR="$APP_DIR/resources/app"
     ;;
   *)

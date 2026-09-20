@@ -12,8 +12,13 @@
   This uses the "Desktop Bridge" pattern (EntryPoint="Windows.
   FullTrustApplication" + the runFullTrust capability below) — the
   standard, Microsoft-documented way to package an existing, unmodified
-  Win32 app for the Store without rewriting it as a UWP app. hupi-code.exe
-  itself needs zero changes for this.
+  Win32 app for the Store without rewriting it as a UWP app. The
+  packaged executable itself needs zero changes for this. Its real name
+  is "HUPI Code.exe" (with a space) — @vscode/gulp-electron's win32.js
+  renames the root .exe to `${productName}.exe`, and productName comes
+  from product.nameShort ("HUPI Code"), not applicationName
+  ("hupi-code") — confirmed by inspecting that package's actual source
+  after a real build's smoke test failed looking for the wrong name.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
@@ -41,7 +46,7 @@
   </Resources>
 
   <Applications>
-    <Application Id="HUPICode" Executable="hupi-code.exe" EntryPoint="Windows.FullTrustApplication">
+    <Application Id="HUPICode" Executable="HUPI Code.exe" EntryPoint="Windows.FullTrustApplication">
       <uap:VisualElements
         DisplayName="HUPI Code"
         Description="A HUPI-native fork of VS Code — chat, inline edit, completions, and multi-file review, backed by your own HUPI memory gateway instead of a vendor."
