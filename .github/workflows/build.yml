@@ -211,6 +211,37 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-darwin-arm64"
 
+      # Secrets aren't available to workflow runs triggered by a pull
+      # request from a fork (GitHub's own security default), so signing/
+      # notarizing only runs for pushes to main and PRs from branches in
+      # this same repo — fork PRs still get a full build + smoke test,
+      # just an unsigned one, same as before this was wired in.
+      - name: Check Apple signing credentials are available
+        id: apple_creds
+        run: |
+          if [ -n "${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Code-sign HUPI Code
+        if: steps.apple_creds.outputs.available == 'true'
+        working-directory: hupi-code
+        env:
+          APPLE_CERTIFICATE_P12_BASE64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: ./build/sign-macos.sh "${{ github.workspace }}/out/VSCode-darwin-arm64"
+
+      - name: Notarize HUPI Code
+        if: steps.apple_creds.outputs.available == 'true'
+        working-directory: hupi-code
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: ./build/notarize-macos.sh "${{ github.workspace }}/out/VSCode-darwin-arm64"
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
