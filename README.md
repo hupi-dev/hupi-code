@@ -32,6 +32,15 @@ inline ghost-text completions, custom diff panels) is reachable that
 way, without touching upstream source, and that's still the preferred
 direction before reaching for another core patch.
 
+**Not done, deliberately deferred**: stripping the Microsoft
+account-sign-in prompt (the person-icon in the Activity Bar that nags
+you to sign in for Settings Sync) and the Marketplace's
+Microsoft-curated "Recommended extensions" nags. Both are cosmetic —
+nothing broken, nothing insecure — but both live in core workbench
+chrome, not in an extension, so the fix is a third core patch, not a
+`product-overlay.json` change. Deferred for now rather than built,
+since it's polish, not a gap anyone's hit yet.
+
 Linux, Windows, and macOS (arm64) all build in CI now — see
 [docs/BUILD.md](docs/BUILD.md). The macOS build is now code-signed and
 notarized with a real Apple Developer ID in CI (see the Phase 4 note
