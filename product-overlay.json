@@ -24,5 +24,6 @@
   },
   "reportIssueUrl": "https://github.com/hupi-dev/hupi-code/issues/new",
   "requestFeatureUrl": "https://github.com/hupi-dev/hupi-code/issues/new",
-  "documentationUrl": "https://hupi.dev/docs"
+  "documentationUrl": "https://hupi.dev/docs",
+  "hupiDisableOnboardingWizard": true
 }

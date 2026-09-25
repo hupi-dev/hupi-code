@@ -16,7 +16,7 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-Two core patches so far. `patches/0001-*.patch` is mechanical, not
+Three core patches so far. `patches/0001-*.patch` is mechanical, not
 UX — it stops VS Code's own packaging pipeline from hard-failing over
 Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
 regardless of whether the extension exists at all). `patches/0002-*.patch`
@@ -25,19 +25,28 @@ is the first real Phase 3 UX-level patch: it removes the four
 first-launch Getting Started walkthrough with — core workbench content,
 not reachable via `product-overlay.json` or by just removing the
 Copilot extension, and not something a HUPI-native IDE (which already
-bundles its own chat) should be steering new users toward. Everything
-else so far is still extension-API-only — a lot of what "feels like
-Cursor" (native chat UI,
-inline ghost-text completions, custom diff panels) is reachable that
-way, without touching upstream source, and that's still the preferred
-direction before reaching for another core patch.
+bundles its own chat) should be steering new users toward.
+`patches/0003-*.patch` fixes a bigger version of the same problem,
+found via a real screenshot generated for Microsoft Store certification
+(see docs/MICROSOFT_STORE.md): upstream's first-launch onboarding
+wizard — a whole multi-step modal covering the entire window — is
+driven by `product.defaultChatAgent`, hardcoded to Copilot's identity
+and shown regardless of whether the extension is bundled. Reskinning it
+was rejected as unsafe (it assumes Copilot-specific entitlement/quota
+machinery HUPI's extension doesn't implement); the patch skips it
+outright via a new `hupiDisableOnboardingWizard` product.json flag —
+see docs/UPSTREAM_UPGRADES.md for the full reasoning. Everything else so
+far is still extension-API-only — a lot of what "feels like Cursor"
+(native chat UI, inline ghost-text completions, custom diff panels) is
+reachable that way, without touching upstream source, and that's still
+the preferred direction before reaching for another core patch.
 
 **Not done, deliberately deferred**: stripping the Microsoft
 account-sign-in prompt (the person-icon in the Activity Bar that nags
 you to sign in for Settings Sync) and the Marketplace's
 Microsoft-curated "Recommended extensions" nags. Both are cosmetic —
 nothing broken, nothing insecure — but both live in core workbench
-chrome, not in an extension, so the fix is a third core patch, not a
+chrome, not in an extension, so the fix is a fourth core patch, not a
 `product-overlay.json` change. Deferred for now rather than built,
 since it's polish, not a gap anyone's hit yet.
 

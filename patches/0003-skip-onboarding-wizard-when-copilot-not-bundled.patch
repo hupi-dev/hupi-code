@@ -1,0 +1,41 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index 1234567..89abcde 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -269,9 +269,10 @@ export interface IProductConfiguration {
+ 
+ 	readonly commonlyUsedSettings?: string[];
+ 	readonly aiGeneratedWorkspaceTrust?: IAiGeneratedWorkspaceTrust;
+ 
+ 	readonly defaultChatAgent: IDefaultChatAgent;
++	readonly hupiDisableOnboardingWizard?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+ 	readonly voiceWsUrl?: string;
+diff --git a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
+index 1234567..89abcde 100644
+--- a/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
++++ b/src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts
+@@ -166,6 +166,21 @@ export class OnboardingVariationA extends Disposable implements IOnboardingSer
+ 	}
+ 
+ 	show(): void {
++		// HUPI Code patch: this whole wizard is driven by
++		// product.defaultChatAgent, which upstream hardcodes to GitHub
++		// Copilot's identity (sign-in copy, entitlement/quota checks, the
++		// walkthrough command it links to) — untouched by this build's own
++		// product-overlay.json rename, and shown regardless of whether the
++		// Copilot extension is actually bundled (build.sh deletes it, but
++		// nothing here checks that). Reskinning it to point at HUPI's own
++		// extension instead isn't safe: the wizard assumes Copilot-specific
++		// machinery (entitlement/quota state, specific commands) HUPI's
++		// extension doesn't implement. Skipping it outright is correct for
++		// a Copilot-less build — HUPI's own sidebar/chat participant is
++		// already visible without a wizard to introduce it.
++		if (product.hupiDisableOnboardingWizard) {
++			return;
++		}
+ 		if (this.overlay) {
+ 			return;
+ 		}

@@ -88,6 +88,32 @@ Copilot access, not a general on/off switch — reaching for it here
 would have been a bigger, less legible change for the same outcome a
 small content patch already gets cleanly.
 
+`patches/0003-skip-onboarding-wizard-when-copilot-not-bundled.patch` —
+a second Phase 3 UX patch, found the same way 0002 was: by actually
+looking at a real screenshot, not by auditing source in the abstract
+(see the Microsoft Store certification story — the first submission
+was rejected for using a website screenshot instead of the app, and the
+CI-generated replacement screenshot then revealed this). Upstream's
+first-launch onboarding wizard
+(`src/vs/workbench/contrib/welcomeOnboarding/browser/onboardingVariationA.ts`)
+is a whole multi-step modal (theme picker, keymap picker, a
+"Get Started" step) gated entirely on `product.defaultChatAgent` — a
+block every upstream `product.json` hardcodes to GitHub Copilot's
+identity (sign-in copy, entitlement/quota-check machinery, a
+`github.copilot.open.walkthrough` command reference), untouched by
+`product-overlay.json`'s rename, and shown regardless of whether
+`extensions/copilot` is actually present. Reskinning it to point at
+HUPI's own extension instead was considered and rejected: the wizard
+assumes Copilot-specific entitlement/quota state HUPI's extension has
+no equivalent for, so repointing `defaultChatAgent.extensionId` would
+trade one broken wizard for a differently-broken one, not a working
+one. The patch adds a new optional `hupiDisableOnboardingWizard` field
+to `IProductConfiguration` (`src/vs/base/common/product.ts`) — set to
+`true` in `product-overlay.json` — and an early return at the top of
+`OnboardingVariationA.show()` when it's set, so the wizard is skipped
+outright rather than reskinned. HUPI's own sidebar/chat participant is
+already visible in the editor without a wizard needed to introduce it.
+
 ## A misdiagnosis worth recording: there was no Windows hang
 
 Several windows-x64 CI runs failed with the smoke test reporting
