@@ -23,6 +23,9 @@
 # it looks the same across platforms — one platform's screenshot is
 # sufficient evidence of what the app actually looks like.
 #
+# Requires xdotool (installed alongside xvfb in build.yml) to dismiss
+# the first-launch onboarding wizard before capturing — see below.
+#
 # Usage: xvfb-run -a ./build/capture-screenshot.sh /path/to/VSCode-linux-x64 /path/to/output.png
 set -euo pipefail
 
@@ -46,6 +49,20 @@ APP_PID=$!
 # comfortably enough headroom in local testing for the window, sidebar,
 # and Getting Started content to fully render.
 sleep 15
+
+# Upstream's first-launch onboarding wizard (a whole multi-step modal —
+# theme picker, "Get started" — driven by product.json's
+# defaultChatAgent block, which still points at GitHub Copilot; see
+# docs/UPSTREAM_UPGRADES.md) covers the real window on first launch.
+# It's a known, tracked issue (still Copilot-branded throughout, not yet
+# patched — a bigger job than this script), but it also means a
+# screenshot taken right after launch shows that wizard, not HUPI Code
+# itself, which defeats the actual point of this script. Every step of
+# that wizard shares the same close ("X") button position, so
+# dismissing it this way is robust regardless of which step first
+# render happens to land on.
+xdotool mousemove 1250 245 click 1
+sleep 2
 
 python3 - "$OUTPUT_PNG" <<'PY'
 import sys

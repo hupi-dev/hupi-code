@@ -33,12 +33,12 @@ jobs:
             pkg-config libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 \
             rpm bubblewrap socat libsecret-1-dev libx11-dev \
             libasound2t64 libnss3 libatk1.0-0t64 libatk-bridge2.0-0t64 \
-            libxss1 xvfb || \
+            libxss1 xvfb xdotool || \
           sudo apt-get install -y -qq \
             pkg-config libgtk-3-0 libxkbfile-dev libkrb5-dev libgbm1 \
             rpm bubblewrap socat libsecret-1-dev libx11-dev \
             libasound2 libnss3 libatk1.0-0 libatk-bridge2.0-0 \
-            libxss1 xvfb
+            libxss1 xvfb xdotool
 
       - name: Set up nvm
         run: |
