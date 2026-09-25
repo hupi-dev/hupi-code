@@ -234,6 +234,28 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
+      # Non-blocking, same as the Linux job's own screenshot step —
+      # evidence for Store-listing/marketing use, not a correctness
+      # check (Smoke test above is what actually gates the build).
+      - name: Capture a screenshot of the running app
+        shell: bash
+        working-directory: hupi-code
+        continue-on-error: true
+        run: |
+          mkdir -p "${{ github.workspace }}/out/screenshots"
+          ./build/capture-screenshot.sh \
+            "${{ github.workspace }}/out/VSCode-win32-x64" \
+            "${{ github.workspace }}/out/screenshots/hupi-code.png"
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-win32-x64-screenshot
+          path: out/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
@@ -299,6 +321,29 @@ jobs:
       - name: Smoke test
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-darwin-arm64"
+
+      # Non-blocking, same as the Linux/Windows jobs' own screenshot
+      # step — evidence for Store-listing/marketing use, not a
+      # correctness check. Runs before signing/notarizing below: it
+      # doesn't touch the .app bundle's contents, just launches and
+      # screenshots it, so there's no reason to wait.
+      - name: Capture a screenshot of the running app
+        working-directory: hupi-code
+        continue-on-error: true
+        run: |
+          mkdir -p "${{ github.workspace }}/out/screenshots"
+          ./build/capture-screenshot.sh \
+            "${{ github.workspace }}/out/VSCode-darwin-arm64" \
+            "${{ github.workspace }}/out/screenshots/hupi-code.png"
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-darwin-arm64-screenshot
+          path: out/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
 
       # Secrets aren't available to workflow runs triggered by a pull
       # request from a fork (GitHub's own security default), so signing/

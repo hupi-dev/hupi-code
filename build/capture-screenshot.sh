@@ -8,34 +8,56 @@
 # available as a CI artifact instead of hand-captured off someone's own
 # machine.
 #
-# Must be invoked already wrapped in xvfb-run (see build.yml) rather
-# than calling xvfb-run internally: the app (backgrounded below) and the
-# screenshot tool both need to see the same virtual DISPLAY, which only
-# happens if both are children of the same xvfb-run-launched shell —
-# backgrounding a second, separate `xvfb-run ... &` from here would hand
-# each process its own independent virtual display.
+# Runs on all three platforms build.sh can produce, unlike its first
+# version (Linux-only): mss (the Python screenshot library used below)
+# is genuinely cross-platform — X11 on Linux, CoreGraphics on macOS,
+# GDI on Windows — via ctypes, no native compilation and nothing
+# platform-specific to install beyond the pip package itself.
 #
-# Linux-only: smoke-test.sh already runs on all three platforms because
-# xvfb (Linux's virtual-display tool) is what makes a headless CI
-# runner's total absence of a display survivable; Windows/macOS
-# GitHub-hosted runners already have a real desktop session. VS Code
-# draws its own title bar and UI rather than using native OS chrome, so
-# it looks the same across platforms — one platform's screenshot is
-# sufficient evidence of what the app actually looks like.
+# On Linux only, must be invoked already wrapped in xvfb-run (see
+# build.yml) rather than calling xvfb-run internally: the app
+# (backgrounded below) and the screenshot tool both need to see the
+# same virtual DISPLAY, which only happens if both are children of the
+# same xvfb-run-launched shell — backgrounding a second, separate
+# `xvfb-run ... &` from here would hand each process its own
+# independent virtual display. Windows/macOS GitHub-hosted runners
+# already have a real desktop session, so no virtual-display wrapper is
+# needed (or available) there.
 #
-# Requires xdotool (installed alongside xvfb in build.yml) to dismiss
-# the first-launch onboarding wizard before capturing — see below.
-#
-# Usage: xvfb-run -a ./build/capture-screenshot.sh /path/to/VSCode-linux-x64 /path/to/output.png
+# Usage:
+#   Linux:          xvfb-run -a ./build/capture-screenshot.sh <path to VSCode-linux-x64> <output png>
+#   macOS/Windows:  ./build/capture-screenshot.sh <path to VSCode-<platform>-<arch>> <output png>
 set -euo pipefail
 
-APP_DIR="${1:?usage: capture-screenshot.sh <path to VSCode-linux-x64> <output png path>}"
-OUTPUT_PNG="${2:?usage: capture-screenshot.sh <path to VSCode-linux-x64> <output png path>}"
-APP_BIN="$APP_DIR/hupi-code"
+APP_DIR="${1:?usage: capture-screenshot.sh <path to VSCode-<platform>-<arch>> <output png path>}"
+OUTPUT_PNG="${2:?usage: capture-screenshot.sh <path to VSCode-<platform>-<arch>> <output png path>}"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
 
-python3 -m pip install --quiet --user mss
+# Same per-OS binary path smoke-test.sh already resolves — see that
+# script's own comment for exactly why each of these three is what it
+# is (linuxExecutableName vs. product.nameShort-derived packaging).
+case "$(uname -s)" in
+  Linux*)   APP_BIN="$APP_DIR/hupi-code" ;;
+  Darwin*)  APP_BIN="$APP_DIR/HUPI Code.app/Contents/MacOS/HUPI Code" ;;
+  MINGW*|MSYS*|CYGWIN*) APP_BIN="$APP_DIR/HUPI Code.exe" ;;
+  *) echo "unsupported OS: $(uname -s)" >&2; exit 1 ;;
+esac
+
+# Same python3-or-python fallback build.sh already needed — native
+# Windows Python installs typically provide only python.exe, not a
+# python3.exe alias, unlike Linux/macOS (see
+# docs/UPSTREAM_UPGRADES.md's "python3 hardcoded" note).
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "python3 (or python) not found on PATH — required to capture the screenshot" >&2
+  exit 1
+fi
+
+"$PYTHON" -m pip install --quiet --user mss
 
 echo "==> launching to render a real screenshot"
 "$APP_BIN" --no-sandbox --disable-gpu --disable-workspace-trust \
@@ -50,21 +72,23 @@ APP_PID=$!
 # and Getting Started content to fully render.
 sleep 15
 
-# Upstream's first-launch onboarding wizard (a whole multi-step modal —
-# theme picker, "Get started" — driven by product.json's
-# defaultChatAgent block, which still points at GitHub Copilot; see
-# docs/UPSTREAM_UPGRADES.md) covers the real window on first launch.
-# It's a known, tracked issue (still Copilot-branded throughout, not yet
-# patched — a bigger job than this script), but it also means a
-# screenshot taken right after launch shows that wizard, not HUPI Code
-# itself, which defeats the actual point of this script. Every step of
-# that wizard shares the same close ("X") button position, so
-# dismissing it this way is robust regardless of which step first
-# render happens to land on.
-xdotool mousemove 1250 245 click 1
-sleep 2
+# Belt-and-suspenders only, Linux-only: patches/0003 already suppresses
+# upstream's first-launch onboarding wizard outright (see
+# docs/UPSTREAM_UPGRADES.md), so this click now lands on the empty
+# editor and does nothing — kept as a no-op safety net in case a future
+# upstream version bump reopens the wizard before that patch is
+# re-verified against the new tag, rather than silently capturing it
+# again unnoticed. Not worth the extra dependency (xdotool has no
+# direct macOS/Windows equivalent) to replicate on those two platforms
+# for a wizard that's already fully suppressed at the source.
+case "$(uname -s)" in
+  Linux*)
+    xdotool mousemove 1250 245 click 1
+    sleep 2
+    ;;
+esac
 
-python3 - "$OUTPUT_PNG" <<'PY'
+"$PYTHON" - "$OUTPUT_PNG" <<'PY'
 import sys
 from mss import mss
 with mss() as sct:
