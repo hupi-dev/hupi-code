@@ -57,6 +57,29 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-linux-x64"
 
+      # Non-blocking: this is evidence for Store-listing/marketing use
+      # (see capture-screenshot.sh's own comment for exactly why it
+      # exists), not a correctness check — smoke-test.sh above is what
+      # actually gates the build. A screenshot hiccup shouldn't fail CI.
+      - name: Capture a screenshot of the running app
+        working-directory: hupi-code
+        continue-on-error: true
+        run: |
+          mkdir -p "${{ github.workspace }}/out/screenshots"
+          xvfb-run -a --server-args="-screen 0 1600x1000x24" \
+            ./build/capture-screenshot.sh \
+              "${{ github.workspace }}/out/VSCode-linux-x64" \
+              "${{ github.workspace }}/out/screenshots/hupi-code.png"
+
+      - name: Upload screenshot artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hupi-code-screenshot
+          path: out/screenshots/
+          retention-days: 7
+          if-no-files-found: ignore
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
