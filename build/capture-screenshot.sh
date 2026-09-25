@@ -57,7 +57,15 @@ else
   exit 1
 fi
 
-"$PYTHON" -m pip install --quiet --user mss
+# Falls back to --break-system-packages on the second attempt only:
+# Homebrew's Python on the macOS runner enforces PEP 668
+# ("externally-managed-environment") and refuses a bare --user install
+# outright, a restriction Linux/Windows runners' own Python doesn't
+# have. Trying the plain form first, rather than always passing the
+# override flag, avoids depending on every platform's pip recognizing
+# a flag only some of them actually need.
+"$PYTHON" -m pip install --quiet --user mss || \
+  "$PYTHON" -m pip install --quiet --user --break-system-packages mss
 
 echo "==> launching to render a real screenshot"
 "$APP_BIN" --no-sandbox --disable-gpu --disable-workspace-trust \
