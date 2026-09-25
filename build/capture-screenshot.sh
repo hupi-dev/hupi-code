@@ -49,7 +49,7 @@ sleep 15
 
 python3 - "$OUTPUT_PNG" <<'PY'
 import sys
-from mss.mss import mss
+from mss import mss
 with mss() as sct:
     sct.shot(output=sys.argv[1])
 PY
