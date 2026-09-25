@@ -48,6 +48,15 @@ jobs:
         working-directory: hupi-code
         env:
           HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+          # @vscode/ripgrep's postinstall fetches a prebuilt binary from
+          # api.github.com, unauthenticated by default (60 requests/hour
+          # per IP — easily exhausted on a shared GitHub-hosted-runner IP
+          # pool, which is exactly what surfaced as a 403 here, not a real
+          # outage). Its own postinstall.js reads GITHUB_TOKEN and sends it
+          # as an auth header when present, raising the limit to 5000/hour —
+          # the free per-job token already provided below is enough for the
+          # one request this needs.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           export NVM_DIR="$HOME/.nvm"
           [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
@@ -187,6 +196,15 @@ jobs:
         working-directory: hupi-code
         env:
           HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+          # @vscode/ripgrep's postinstall fetches a prebuilt binary from
+          # api.github.com, unauthenticated by default (60 requests/hour
+          # per IP — easily exhausted on a shared GitHub-hosted-runner IP
+          # pool, which is exactly what surfaced as a 403 here, not a real
+          # outage). Its own postinstall.js reads GITHUB_TOKEN and sends it
+          # as an auth header when present, raising the limit to 5000/hour —
+          # the free per-job token already provided below is enough for the
+          # one request this needs.
+          GITHUB_TOKEN: ${{ github.token }}
           # Pinned under github.workspace (rather than build.sh's default
           # mktemp -d, which would land somewhere under the system temp
           # dir) so the single Defender exclusion above actually covers
@@ -267,6 +285,15 @@ jobs:
         working-directory: hupi-code
         env:
           HUPI_EXTENSION_DIR: ${{ github.workspace }}/hupi/vscode-extension
+          # @vscode/ripgrep's postinstall fetches a prebuilt binary from
+          # api.github.com, unauthenticated by default (60 requests/hour
+          # per IP — easily exhausted on a shared GitHub-hosted-runner IP
+          # pool, which is exactly what surfaced as a 403 here, not a real
+          # outage). Its own postinstall.js reads GITHUB_TOKEN and sends it
+          # as an auth header when present, raising the limit to 5000/hour —
+          # the free per-job token already provided below is enough for the
+          # one request this needs.
+          GITHUB_TOKEN: ${{ github.token }}
         run: OUT_DIR="${{ github.workspace }}/out" ./build/build.sh
 
       - name: Smoke test
