@@ -119,6 +119,20 @@ echo "==> cloning microsoft/vscode @ $UPSTREAM_TAG into $WORKDIR"
 git -c core.autocrlf=false clone --depth 1 --branch "$UPSTREAM_TAG" https://github.com/microsoft/vscode.git "$WORKDIR"
 
 echo "==> installing the exact Node version this tag requires"
+# A real, reproduced gotcha on at least one Linux environment (not GitHub's
+# own hosted runners, which are unaffected): merely *sourcing* nvm.sh under
+# this script's own `set -e` can fail with a nonzero exit before reaching
+# any of the code below, aborting the whole build with no error message —
+# something inside nvm.sh's own initialization returns non-zero in a
+# non-interactive shell, which `set -e` treats as fatal. If this step ever
+# silently vanishes from a build's own log output right after this echo,
+# that's the symptom — confirm by reproducing with
+# `bash -c 'set -e; source ~/.nvm/nvm.sh; echo reached'` (missing "reached"
+# means this is it). Workaround: pre-install the pinned version with nvm
+# once interactively, then temporarily rename nvm.sh out of the way so this
+# `if` falls through to the `else` branch below, which just uses whatever
+# compatible `node` is already on PATH — exactly the fallback this script
+# already had a reason to support.
 if [ -f ~/.nvm/nvm.sh ]; then
   # shellcheck source=/dev/null
   source ~/.nvm/nvm.sh
