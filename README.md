@@ -16,7 +16,7 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-Three core patches so far. `patches/0001-*.patch` is mechanical, not
+Four core patches so far. `patches/0001-*.patch` is mechanical, not
 UX — it stops VS Code's own packaging pipeline from hard-failing over
 Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
 regardless of whether the extension exists at all). `patches/0002-*.patch`
@@ -35,18 +35,28 @@ and shown regardless of whether the extension is bundled. Reskinning it
 was rejected as unsafe (it assumes Copilot-specific entitlement/quota
 machinery HUPI's extension doesn't implement); the patch skips it
 outright via a new `hupiDisableOnboardingWizard` product.json flag —
-see docs/UPSTREAM_UPGRADES.md for the full reasoning. Everything else so
-far is still extension-API-only — a lot of what "feels like Cursor"
-(native chat UI, inline ghost-text completions, custom diff panels) is
-reachable that way, without touching upstream source, and that's still
-the preferred direction before reaching for another core patch.
+see docs/UPSTREAM_UPGRADES.md for the full reasoning.
+`patches/0004-*.patch` fixes a third surface driven by that same
+`product.defaultChatAgent` field, this time found by actually using the
+Chat panel: sending a message (or running `/init`) before a real chat
+extension is active trips a fallback "default agent" that silently
+tries to install `GitHub.copilot-chat` from the gallery, which fails on
+open-vsx.org with "An error occurred while setting up chat" / "cannot
+be installed because it was not found." Skips the whole
+`ChatSetupContribution` (not just the failing install call) via a new
+`hupiDisableChatSetup` flag, same reasoning and shape as 0003 — see
+docs/UPSTREAM_UPGRADES.md. Everything else so far is still
+extension-API-only — a lot of what "feels like Cursor" (native chat UI,
+inline ghost-text completions, custom diff panels) is reachable that
+way, without touching upstream source, and that's still the preferred
+direction before reaching for another core patch.
 
 **Not done, deliberately deferred**: stripping the Microsoft
 account-sign-in prompt (the person-icon in the Activity Bar that nags
 you to sign in for Settings Sync) and the Marketplace's
 Microsoft-curated "Recommended extensions" nags. Both are cosmetic —
 nothing broken, nothing insecure — but both live in core workbench
-chrome, not in an extension, so the fix is a fourth core patch, not a
+chrome, not in an extension, so the fix is another core patch, not a
 `product-overlay.json` change. Deferred for now rather than built,
 since it's polish, not a gap anyone's hit yet.
 

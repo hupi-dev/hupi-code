@@ -1,0 +1,46 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index 82b03fd..972830f 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -272,6 +272,7 @@ export interface IProductConfiguration {
+ 
+ 	readonly defaultChatAgent: IDefaultChatAgent;
+ 	readonly hupiDisableOnboardingWizard?: boolean;
++	readonly hupiDisableChatSetup?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/workbench/contrib/chat/browser/chatSetup/chatSetupContributions.ts b/src/vs/workbench/contrib/chat/browser/chatSetup/chatSetupContributions.ts
+index 1f79ad9..1fb70b6 100644
+--- a/src/vs/workbench/contrib/chat/browser/chatSetup/chatSetupContributions.ts
++++ b/src/vs/workbench/contrib/chat/browser/chatSetup/chatSetupContributions.ts
+@@ -88,6 +88,29 @@ export class ChatSetupContribution extends Disposable implements IWorkbenchContr
+ 	) {
+ 		super();
+ 
++		if (product.hupiDisableChatSetup) {
++			// HUPI Code patch: this whole contribution exists to onboard
++			// users into GitHub Copilot - among other things, it registers
++			// a fallback "default agent" that, on first use (e.g. /init,
++			// or any message sent before a real chat extension is active),
++			// silently calls ChatSetupController.doInstall(), which tries
++			// to install product.defaultChatAgent.chatExtensionId
++			// (hardcoded upstream to GitHub.copilot-chat). This build's
++			// extension gallery is open-vsx.org, which doesn't carry that
++			// proprietary extension, so the install always fails with
++			// "An error occurred while setting up chat" / "cannot be
++			// installed because it was not found" - the same class of bug
++			// patches 0002/0003 already fixed for two other surfaces (the
++			// Getting Started walkthrough and the first-launch onboarding
++			// wizard), surfacing here a third time via the live Chat view
++			// itself. Skipping the whole contribution, not just the
++			// install call, also removes the growth-session nags, the
++			// "Sign In" title bar entry, and the Copilot-specific command
++			// palette actions it would otherwise register - HUPI's own
++			// chat participant/sidebar don't need any of this to work.
++			return;
++		}
++
+ 		const context = chatEntitlementService.context?.value;
+ 		const requests = chatEntitlementService.requests?.value;
+ 		if (!context || !requests) {
