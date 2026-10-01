@@ -114,6 +114,39 @@ to `IProductConfiguration` (`src/vs/base/common/product.ts`) — set to
 outright rather than reskinned. HUPI's own sidebar/chat participant is
 already visible in the editor without a wizard needed to introduce it.
 
+`patches/0004-skip-chat-setup-when-copilot-not-bundled.patch` — a third
+Phase 3 UX patch for the same `product.defaultChatAgent` root cause as
+0002/0003, this time found by actually using the built app's Chat
+panel rather than its Getting Started/onboarding surfaces: sending a
+message (or running `/init`) with no chat extension active yet trips
+`ChatSetupContribution`'s fallback "default agent"
+(`src/vs/workbench/contrib/chat/browser/chatSetup/chatSetupContributions.ts`),
+which calls `ChatSetupController.doInstall()`
+(`chatSetupController.ts`) to silently install
+`product.defaultChatAgent.chatExtensionId` — hardcoded upstream to
+`GitHub.copilot-chat` — from the configured extension gallery. Since
+`product-overlay.json` points the gallery at open-vsx.org, which
+doesn't carry that proprietary extension, the install always fails and
+surfaces as a user-facing dialog: "An error occurred while setting up
+chat. Would you like to try again?" / "The extension
+'GitHub.copilot-chat' cannot be installed because it was not found."
+Same reasoning as 0003 for not reskinning: `ChatSetupController`'s
+entitlement/quota/sign-up machinery is Copilot-specific, with nothing
+in HUPI's own extension to repoint it at. The patch adds a new
+optional `hupiDisableChatSetup` field to `IProductConfiguration`
+(`src/vs/base/common/product.ts`) — set to `true` in
+`product-overlay.json` — and an early return at the top of
+`ChatSetupContribution`'s constructor when it's set, before any of its
+sub-registrations run (the fallback default agent, growth-session
+nags, the "Sign In" title bar entry, Copilot-specific command palette
+actions, the URL link handler) — the whole contribution is upstream's
+Copilot onboarding surface, not just the one call site that happens to
+throw. Not yet verified against a real build (only confirmed: the
+patch applies cleanly in sequence after 0001-0003 against a fresh
+`1.137.0` checkout) — the next full `build/build.sh` run should
+exercise this by using the live Chat panel, not just checking that it
+launches.
+
 ## A misdiagnosis worth recording: there was no Windows hang
 
 Several windows-x64 CI runs failed with the smoke test reporting

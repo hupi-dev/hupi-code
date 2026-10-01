@@ -19,6 +19,15 @@
 # That's exactly what this script does, then asserts hupi.hupi-vscode is
 # in the result.
 #
+# The same probe also asserts patches/0004's fix
+# (hupiDisableChatSetup) actually took: upstream's
+# `workbench.action.chat.triggerSetup` command only exists at all if
+# `ChatSetupContribution`'s `registerActions` ran, which is exactly what
+# that patch skips. Its absence from `vscode.commands.getCommands(true)`
+# is the one check that would have caught the original bug (the "cannot
+# be installed because it was not found" Chat Setup dialog) in CI,
+# rather than needing a human to notice it by actually using Chat.
+#
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
@@ -96,9 +105,11 @@ EOF
 cat > "$PROBE_DIR/extension.js" <<EOF
 const vscode = require('vscode');
 const fs = require('fs');
-function activate() {
+async function activate() {
   const ids = vscode.extensions.all.map(e => e.id).sort();
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n'));
+  const commands = await vscode.commands.getCommands(true);
+  const chatSetupCommand = commands.includes('workbench.action.chat.triggerSetup') ? 'present' : 'absent';
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + chatSetupCommand);
 }
 module.exports = { activate };
 EOF
@@ -159,4 +170,13 @@ if ! grep -qx "hupi.hupi-vscode" "$RESULT_FILE"; then
   exit 1
 fi
 
-echo "OK: HUPI Code started and hupi.hupi-vscode is loaded as a built-in extension."
+if grep -qx "present" "$RESULT_FILE"; then
+  echo "FAIL: workbench.action.chat.triggerSetup is registered — patches/0004's"
+  echo "hupiDisableChatSetup gate did not take; Chat will try (and fail) to"
+  echo "install GitHub.copilot-chat on first use. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
+echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
+echo "and upstream's Copilot Chat Setup is confirmed disabled."
