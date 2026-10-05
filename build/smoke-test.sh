@@ -28,6 +28,15 @@
 # be installed because it was not found" Chat Setup dialog) in CI,
 # rather than needing a human to notice it by actually using Chat.
 #
+# Same technique, same reasoning, for patches/0006
+# (hupiDisableCopilotAccountSignIn): `workbench.action.agenticSignIn`
+# (AGENTIC_SIGN_IN_COMMAND_ID, src/vs/sessions/common/sessionCommands.ts)
+# only exists if account.contribution.ts's wrapped `registerAction2` call
+# ran, which is exactly what that patch's product.json gate skips. Its
+# absence is the automated check that would have caught the original bug
+# (the Account Menu's "Sign in to use GitHub Copilot" entry) without
+# needing a human to open the Account Menu and look.
+#
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
@@ -109,7 +118,8 @@ async function activate() {
   const ids = vscode.extensions.all.map(e => e.id).sort();
   const commands = await vscode.commands.getCommands(true);
   const chatSetupCommand = commands.includes('workbench.action.chat.triggerSetup') ? 'present' : 'absent';
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + chatSetupCommand);
+  const agenticSignInCommand = commands.includes('workbench.action.agenticSignIn') ? 'present' : 'absent';
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand);
 }
 module.exports = { activate };
 EOF
@@ -170,7 +180,7 @@ if ! grep -qx "hupi.hupi-vscode" "$RESULT_FILE"; then
   exit 1
 fi
 
-if grep -qx "present" "$RESULT_FILE"; then
+if grep -qx "chatSetupCommand:present" "$RESULT_FILE"; then
   echo "FAIL: workbench.action.chat.triggerSetup is registered — patches/0004's"
   echo "hupiDisableChatSetup gate did not take; Chat will try (and fail) to"
   echo "install GitHub.copilot-chat on first use. Full result:"
@@ -178,5 +188,14 @@ if grep -qx "present" "$RESULT_FILE"; then
   exit 1
 fi
 
+if grep -qx "agenticSignInCommand:present" "$RESULT_FILE"; then
+  echo "FAIL: workbench.action.agenticSignIn is registered — patches/0006's"
+  echo "hupiDisableCopilotAccountSignIn gate did not take; the Account Menu"
+  echo "will still show a \"Sign in to use GitHub Copilot\" entry. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
-echo "and upstream's Copilot Chat Setup is confirmed disabled."
+echo "upstream's Copilot Chat Setup is confirmed disabled, and the Account"
+echo "Menu's Copilot sign-in command is confirmed absent."
