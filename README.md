@@ -16,7 +16,7 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-Five core patches so far. `patches/0001-*.patch` is mechanical, not
+Seven core patches so far. `patches/0001-*.patch` is mechanical, not
 UX — it stops VS Code's own packaging pipeline from hard-failing over
 Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
 regardless of whether the extension exists at all). `patches/0002-*.patch`
@@ -56,14 +56,21 @@ all — it's core workbench chrome, and its one built-in harness
 enabled" regardless of whether the Copilot extension is bundled, which
 it never was here. With no chat participant registered, the view still
 rendered, with a floating "Sign in to use GitHub Copilot" notification
-sitting over it. Fixed by calling the same `setForceHidden` API
-upstream's own `AccountPolicyGateContribution` already uses (production-
-tested) to hide this exact view for enterprise-policy-restricted
-accounts — reused for a different reason here (no Copilot bundled, not
-a policy restriction) via a new `hupiDisableNativeChatView` flag, rather
-than risk unregistering the view container outright (other workbench
-code references its ID directly with no guard for it never having been
-registered). `patches/0006-*.patch` closes a related gap found by
+sitting over it. A first attempt reused the `setForceHidden` API
+upstream's own `AccountPolicyGateContribution` already uses to hide this
+exact view for enterprise-policy-restricted accounts — real build
+verification caught, directly, that this doesn't work: that API is a
+single, shared, last-write-wins flag, and `AccountPolicyGateContribution`
+itself asserts `setForceHidden(false)` on every startup (correctly
+declaring "not policy-restricted"), silently clobbering the override.
+The shipped fix is a dedicated context key
+(`hupiNativeChatViewHidden`), bound and set exactly once from a new
+`hupiDisableNativeChatView` product.json flag by its own small
+contribution — nothing else ever touches this key, so there's no
+equivalent contention risk — ANDed into the view's own `when` clause.
+Verified by reading the actual live value back out of a real running
+build (`_hupi.getContextKeyValue`, see 0007 below), not just that the
+code compiles. `patches/0006-*.patch` closes a related gap found by
 auditing every other "Sign in to use GitHub Copilot" string in upstream
 after 0005: the Account Menu (the person icon) unconditionally
 registered its own Copilot sign-in command, independent of the Chat
@@ -71,11 +78,17 @@ view entirely — already a silent no-op by 0004 (the command it calls is
 never registered), but the menu entry itself was still visible
 regardless, which is arguably worse (a named, branded button that does
 nothing when clicked). Skipped via a new `hupiDisableCopilotAccountSignIn`
-flag, same shape as 0005. Everything else so far is still
-extension-API-only — a lot of what "feels like Cursor" (native chat UI,
-inline ghost-text completions, custom diff panels) is reachable that
-way, without touching upstream source, and that's still the preferred
-direction before reaching for another core patch.
+flag. `patches/0007-*.patch` is diagnostic-only, not a user-facing fix:
+a `build/smoke-test.sh`-only, underscore-prefixed internal command
+(`_hupi.getContextKeyValue`) that reads any context key's live value —
+there's no public (or proposed) extension API for that — so the smoke
+test can assert 0005's actual effect on a real running build instead of
+only checking that it compiles, the exact gap whose absence let 0005's
+first, broken implementation ship undetected. Everything else so far is
+still extension-API-only — a lot of what "feels like Cursor" (native
+chat UI, inline ghost-text completions, custom diff panels) is
+reachable that way, without touching upstream source, and that's still
+the preferred direction before reaching for another core patch.
 
 **Not done, deliberately deferred**: stripping the generic Microsoft
 account-sign-in prompt (the same person-icon in the Activity Bar also

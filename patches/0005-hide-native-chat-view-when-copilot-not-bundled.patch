@@ -10,55 +10,78 @@ index 972830fd..b42b8d01 100644
  	readonly chatParticipantRegistry?: string;
  	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
  	readonly emergencyAlertUrl?: string;
-diff --git a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
-index 4dc3f87b..d03be6ae 100644
---- a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
-+++ b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
-@@ -3401,3 +3401,47 @@ registerSingleton(IAgentHostImportConversationStore, AgentHostImportConversation
- registerSingleton(ISessionSummaryHoverService, SessionSummaryHoverService, InstantiationType.Delayed);
+diff --git a/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts b/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
+index 8fb472b3..d6ae6009 100644
+--- a/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
++++ b/src/vs/workbench/contrib/chat/browser/chatParticipant.contribution.ts
+@@ -12,14 +12,15 @@ import { KeyCode, KeyMod } from '../../../../base/common/keyCodes.js';
+ import { Disposable, DisposableMap, DisposableStore } from '../../../../base/common/lifecycle.js';
+ import * as strings from '../../../../base/common/strings.js';
+ import { localize, localize2 } from '../../../../nls.js';
+-import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
++import { ContextKeyExpr, IContextKeyService, RawContextKey } from '../../../../platform/contextkey/common/contextkey.js';
+ import { ExtensionIdentifier, IExtensionManifest } from '../../../../platform/extensions/common/extensions.js';
+ import { SyncDescriptor } from '../../../../platform/instantiation/common/descriptors.js';
++import product from '../../../../platform/product/common/product.js';
+ import { IProductService } from '../../../../platform/product/common/productService.js';
+ import { Registry } from '../../../../platform/registry/common/platform.js';
+ import { registerIcon } from '../../../../platform/theme/common/iconRegistry.js';
+ import { ViewPaneContainer } from '../../../browser/parts/views/viewPaneContainer.js';
+-import { IWorkbenchContribution } from '../../../common/contributions.js';
++import { IWorkbenchContribution, registerWorkbenchContribution2, WorkbenchPhase } from '../../../common/contributions.js';
+ import { IViewContainersRegistry, IViewDescriptor, IViewsRegistry, ViewContainer, ViewContainerLocation, Extensions as ViewExtensions } from '../../../common/views.js';
+ import { Extensions, IExtensionFeaturesRegistry, IExtensionFeatureTableRenderer, IRenderedData, IRowData, ITableData } from '../../../services/extensionManagement/common/extensionFeatures.js';
+ import { isProposedApiEnabled } from '../../../services/extensions/common/extensions.js';
+@@ -37,6 +38,20 @@ import { ChatViewPane } from './widgetHosts/viewPane/chatViewPane.js';
  
- ChatWidget.CONTRIBS.push(ChatDynamicVariableModel);
+ const chatViewIcon = registerIcon('chat-view-icon', Codicon.chatSparkle, localize('chatViewIcon', 'View icon of the chat view.'));
+ 
++// HUPI Code patch: a dedicated context key for this view's visibility,
++// entirely independent of ChatEntitlementService's own `hidden` key.
++// That key is a single, shared, last-write-wins flag
++// (`ChatEntitlementContext.setForceHidden` / `_forceHidden`) —
++// `AccountPolicyGateContribution` already calls it on every startup to
++// assert "not policy-restricted" (`setForceHidden(false)`), which was
++// confirmed, via a real build, to silently clobber an earlier attempt
++// at reusing that same mechanism here. This key is bound and set
++// exactly once, by `HupiNativeChatViewHiddenContribution` below, from a
++// static `product.json` flag that never changes at runtime — nothing
++// else in the codebase ever touches it, so there's no equivalent
++// contention risk.
++const hupiNativeChatViewHiddenContext = new RawContextKey<boolean>('hupiNativeChatViewHidden', false, { type: 'boolean', description: 'HUPI Code: true when the native Chat view is permanently hidden via product.json' });
 +
-+// HUPI Code patch: chatParticipant.contribution.ts's chatViewContainer/
-+// chatViewDescriptor ("Chat" in the Auxiliary Bar, internally the
-+// "Sessions / Automations / Chats" Agent Sessions UI) isn't an
-+// extension's view — it's core workbench chrome, and its one built-in
-+// harness (`copilotcli`, the @github/copilot-sdk dependency in
-+// platform/agentHost/node/copilot/copilotAgent.ts) is, per that
-+// package's own e2e test docs, "always enabled," regardless of whether
-+// the Copilot extension is bundled (it never was one here to begin
-+// with). With no chat participant registered and that always-present
-+// harness signed out, the view still renders — a real, confirmed
-+// Microsoft Store certification failure ("Unusable Feature: Sign In"):
-+// a floating "Sign in to use GitHub Copilot" notification sitting over
-+// a UI surface whose own in-app help text literally invites a prompt
-+// ("Pitch your idea") HUPI Code can't fulfil through this path at all.
-+// Same reasoning 0002/0003/0004 already apply to every other
-+// Copilot-only surface this fork found: a HUPI-native IDE shouldn't
-+// ask a user to sign in to a competing, unbundled chat.
-+//
-+// setForceHidden is the exact mechanism AccountPolicyGateContribution
-+// (services/policies/browser/accountPolicyGateContribution.ts) already
-+// uses, production-tested, to hide this same view container for
-+// enterprise-policy-restricted accounts — reused here for a different
-+// reason (no Copilot bundled at all, not a policy restriction) rather
-+// than re-deriving a new way to hide it. Chosen over skipping the view
-+// container/descriptor registration outright: other workbench code
-+// references ChatViewId/ChatViewContainerId directly (reveal/focus
-+// commands and similar) with no guard for the view never having been
-+// registered at all — an unknown blast radius this avoids entirely,
-+// since the container still exists, just forced invisible via the
-+// exact context-key path upstream's own policy gate already relies on.
-+class HupiHideNativeChatViewContribution extends Disposable implements IWorkbenchContribution {
-+	static readonly ID = 'workbench.contrib.hupiHideNativeChatView';
+ const chatViewContainer: ViewContainer = Registry.as<IViewContainersRegistry>(ViewExtensions.ViewContainersRegistry).registerViewContainer({
+ 	id: ChatViewContainerId,
+ 	title: localize2('chat.viewContainer.label', "Chat"),
+@@ -70,6 +85,7 @@ const chatViewDescriptor: IViewDescriptor = {
+ 	ctorDescriptor: new SyncDescriptor(ChatViewPane),
+ 	when: ContextKeyExpr.and(
+ 		ChatContextKeys.accountPolicyGateActive.negate(),
++		hupiNativeChatViewHiddenContext.negate(),
+ 		ContextKeyExpr.or(
+ 			ContextKeyExpr.and(
+ 				ChatContextKeys.Setup.hidden.negate(),
+@@ -82,6 +98,23 @@ const chatViewDescriptor: IViewDescriptor = {
+ };
+ Registry.as<IViewsRegistry>(ViewExtensions.ViewsRegistry).registerViews([chatViewDescriptor], chatViewContainer);
+ 
++// HUPI Code patch: binds and sets `hupiNativeChatViewHiddenContext`
++// exactly once, from `product.hupiDisableNativeChatView`, with no
++// further updates ever needed — the real, confirmed Microsoft Store
++// certification failure ("Unusable Feature: Sign In") this fixes is
++// documented on the context key's own declaration above.
++class HupiNativeChatViewHiddenContribution extends Disposable implements IWorkbenchContribution {
++	static readonly ID = 'workbench.contrib.hupiNativeChatViewHidden';
 +
 +	constructor(
-+		@IChatEntitlementService chatEntitlementService: IChatEntitlementService,
++		@IContextKeyService contextKeyService: IContextKeyService,
 +	) {
 +		super();
-+		if (product.hupiDisableNativeChatView) {
-+			chatEntitlementService.setForceHidden(true);
-+		}
++		hupiNativeChatViewHiddenContext.bindTo(contextKeyService).set(!!product.hupiDisableNativeChatView);
 +	}
 +}
-+registerWorkbenchContribution2(HupiHideNativeChatViewContribution.ID, HupiHideNativeChatViewContribution, WorkbenchPhase.BlockStartup);
++registerWorkbenchContribution2(HupiNativeChatViewHiddenContribution.ID, HupiNativeChatViewHiddenContribution, WorkbenchPhase.BlockStartup);
++
+ const chatParticipantExtensionPoint = extensionsRegistry.ExtensionsRegistry.registerExtensionPoint<IRawChatParticipantContribution[]>({
+ 	extensionPoint: 'chatParticipants',
+ 	jsonSchema: {

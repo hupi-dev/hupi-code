@@ -37,6 +37,22 @@
 # (the Account Menu's "Sign in to use GitHub Copilot" entry) without
 # needing a human to open the Account Menu and look.
 #
+# patches/0005 (hupiDisableNativeChatView) can't be checked the same
+# way — it works by a dedicated context key
+# (`hupiNativeChatViewHidden`, pinned once from product.json, never
+# bound/set again afterward — see that patch's own doc comment for why
+# it deliberately doesn't reuse ChatEntitlementService's shared
+# `hidden`/`setForceHidden` mechanism), not by skipping a command's
+# registration, and no public (or proposed) extension API reads an
+# arbitrary context key's live value. patches/0007
+# exists purely to answer that for this script: it registers an
+# internal, underscore-prefixed command
+# (`_hupi.getContextKeyValue`, same "not a public API" convention
+# upstream's own `_chat.notifyQuestionCarouselAnswer` already uses) that
+# wraps `IContextKeyService.getContextKeyValue` directly, so this probe
+# can ask the real running app what the key's value actually is instead
+# of only checking that the patch compiled.
+#
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
@@ -119,7 +135,8 @@ async function activate() {
   const commands = await vscode.commands.getCommands(true);
   const chatSetupCommand = commands.includes('workbench.action.chat.triggerSetup') ? 'present' : 'absent';
   const agenticSignInCommand = commands.includes('workbench.action.agenticSignIn') ? 'present' : 'absent';
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand);
+  const nativeChatViewHidden = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden');
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden);
 }
 module.exports = { activate };
 EOF
@@ -196,6 +213,17 @@ if grep -qx "agenticSignInCommand:present" "$RESULT_FILE"; then
   exit 1
 fi
 
+if ! grep -qx "nativeChatViewHidden:true" "$RESULT_FILE"; then
+  echo "FAIL: the hupiNativeChatViewHidden context key is not true —"
+  echo "patches/0005's hupiDisableNativeChatView gate did not take; the"
+  echo "native Chat view (Sessions/Automations/Chats) will still be visible"
+  echo "with a broken \"Sign in to use GitHub Copilot\" notification on it."
+  echo "Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
-echo "upstream's Copilot Chat Setup is confirmed disabled, and the Account"
-echo "Menu's Copilot sign-in command is confirmed absent."
+echo "upstream's Copilot Chat Setup is confirmed disabled, the native Chat view"
+echo "is confirmed force-hidden, and the Account Menu's Copilot sign-in command"
+echo "is confirmed absent."
