@@ -202,11 +202,12 @@ scratch checkout convention). **Verified against a real build, not just
 source**: a full `build/build.sh` run (0001-0006 together) compiled this
 new contribution with 0 TypeScript errors, and `build/smoke-test.sh`
 confirmed the resulting app actually launches and loads
-`hupi.hupi-vscode` as a built-in. The smoke test's own existing
-assertion only checks 0004's `workbench.action.chat.triggerSetup`
-absence, not this patch's effect directly (the Chat view's own
-visibility isn't something the probe extension currently inspects) —
-worth adding an explicit assertion for this and 0006 in a follow-up.
+`hupi.hupi-vscode` as a built-in. The smoke test's own assertion at the
+time only checked 0004's `workbench.action.chat.triggerSetup` absence,
+not this patch's effect directly — the Chat view's own visibility isn't
+a command-presence question the same technique can answer, so that
+specific gap is still open (see 0006's own entry below, which the same
+technique *could* close, and did).
 
 `patches/0006-remove-copilot-sign-in-from-account-menu.patch` — asked,
 after 0005 shipped, whether any other "Sign in to use GitHub Copilot"
@@ -280,9 +281,14 @@ applies cleanly in sequence against a fresh `1.137.0` checkout
 (`git apply --check`, scratch clone, reverted after), and — same as
 0005 — a full `build/build.sh` + `build/smoke-test.sh` run confirmed it
 compiles with 0 TypeScript errors and the built app still starts and
-loads `hupi.hupi-vscode`. Like 0005, the smoke test's existing assertion
-doesn't directly check this patch's own effect (the Account Menu entry
-being gone) — same follow-up noted there applies here too.
+loads `hupi.hupi-vscode`. Unlike 0005, this patch's own effect *is* a
+command-presence question — `smoke-test.sh` now also asserts
+`workbench.action.agenticSignIn` (`AGENTIC_SIGN_IN_COMMAND_ID`,
+`src/vs/sessions/common/sessionCommands.ts`) is absent from
+`vscode.commands.getCommands(true)`, the exact same technique 0004's
+own check already established, confirmed against the real build from
+this same run (checked with a standalone probe before wiring the
+assertion in, not just trusted because the script didn't throw).
 
 ## A misdiagnosis worth recording: there was no Windows hang
 
@@ -390,17 +396,21 @@ existing assertion).
 
 **What this does and doesn't confirm**: compiles clean and runs without
 crashing, for the whole patch stack — a real, meaningful step up from
-"the patch applies." It does *not* yet directly assert 0005's or 0006's
-own specific behavior (Chat view actually invisible in the UI; Account
-Menu's sign-in entry actually gone) — the smoke test's probe extension
-only checks the one command-absence assertion 0004 already added. A
-real improvement for next time: extend the probe to also assert
-`workbench.action.agenticSignIn` (0006's command ID, from
-`src/vs/sessions/common/sessionCommands.ts`) is absent from
-`vscode.commands.getCommands(true)`, the same proven technique already
-used for 0004. 0005 is harder to check this same way (hiding a view via
-a context key isn't a command-presence question) and wasn't attempted
-here — a non-headless, visual check (or a context-key-reading probe,
-if the extension API exposes one) would be the next thing to try if
-this needs a stronger automated guarantee than a real human launching
-it and looking.
+"the patch applies." At the time of this run, it did not yet directly
+assert either patch's own specific behavior (Chat view actually
+invisible in the UI; Account Menu's sign-in entry actually gone) — the
+smoke test's probe extension only checked the one command-absence
+assertion 0004 already added.
+
+**Closed the 0006 half of that gap immediately after**: added a second
+command-absence assertion to `smoke-test.sh` for
+`workbench.action.agenticSignIn` (0006's command ID), the exact same
+technique already proven for 0004, and reran against this same build —
+confirmed genuinely absent via a standalone probe check before wiring
+the assertion into the script, not just trusted because the script
+didn't throw. 0005 is harder to check this same way (hiding a view via
+a context key isn't a command-presence question) and remains open — a
+non-headless, visual check (or a context-key-reading probe, if the
+extension API exposes one) would be the next thing to try if this
+needs a stronger automated guarantee than a real human launching it and
+looking.
