@@ -16,7 +16,7 @@ extension gallery instead of Microsoft's (whose terms of service forbid
 non-Microsoft products from using it — every serious VS Code fork,
 VSCodium included, points here instead).
 
-Four core patches so far. `patches/0001-*.patch` is mechanical, not
+Five core patches so far. `patches/0001-*.patch` is mechanical, not
 UX — it stops VS Code's own packaging pipeline from hard-failing over
 Copilot's absence (it unconditionally prepares Copilot's ripgrep shim
 regardless of whether the extension exists at all). `patches/0002-*.patch`
@@ -45,11 +45,29 @@ open-vsx.org with "An error occurred while setting up chat" / "cannot
 be installed because it was not found." Skips the whole
 `ChatSetupContribution` (not just the failing install call) via a new
 `hupiDisableChatSetup` flag, same reasoning and shape as 0003 — see
-docs/UPSTREAM_UPGRADES.md. Everything else so far is still
-extension-API-only — a lot of what "feels like Cursor" (native chat UI,
-inline ghost-text completions, custom diff panels) is reachable that
-way, without touching upstream source, and that's still the preferred
-direction before reaching for another core patch.
+docs/UPSTREAM_UPGRADES.md. `patches/0005-*.patch` fixes a fourth
+surface, also found via real Microsoft Store certification feedback
+(a first submission came back flagged "Unusable Feature: Sign In"):
+VS Code's native "Agent Sessions" Chat view (the "Sessions /
+Automations / Chats" panel in the Auxiliary Bar) isn't an extension at
+all — it's core workbench chrome, and its one built-in harness
+(`copilotcli`, the `@github/copilot-sdk` dependency baked directly into
+`platform/agentHost`) is, per that package's own e2e test docs, "always
+enabled" regardless of whether the Copilot extension is bundled, which
+it never was here. With no chat participant registered, the view still
+rendered, with a floating "Sign in to use GitHub Copilot" notification
+sitting over it. Fixed by calling the same `setForceHidden` API
+upstream's own `AccountPolicyGateContribution` already uses (production-
+tested) to hide this exact view for enterprise-policy-restricted
+accounts — reused for a different reason here (no Copilot bundled, not
+a policy restriction) via a new `hupiDisableNativeChatView` flag, rather
+than risk unregistering the view container outright (other workbench
+code references its ID directly with no guard for it never having been
+registered). Everything else so far is still extension-API-only — a
+lot of what "feels like Cursor" (native chat UI, inline ghost-text
+completions, custom diff panels) is reachable that way, without
+touching upstream source, and that's still the preferred direction
+before reaching for another core patch.
 
 **Not done, deliberately deferred**: stripping the Microsoft
 account-sign-in prompt (the person-icon in the Activity Bar that nags

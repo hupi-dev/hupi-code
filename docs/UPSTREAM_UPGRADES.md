@@ -147,6 +147,64 @@ patch applies cleanly in sequence after 0001-0003 against a fresh
 exercise this by using the live Chat panel, not just checking that it
 launches.
 
+`patches/0005-hide-native-chat-view-when-copilot-not-bundled.patch` —
+a fourth Phase 3 UX patch, this time against a root cause that isn't
+`product.defaultChatAgent` at all: found from real Microsoft Store
+certification feedback, a first submission came back rejected with
+"Unusable Feature: Sign In" and a screenshot of the native "Chat" view
+container (`chatParticipant.contribution.ts`'s `chatViewContainer`/
+`chatViewDescriptor`, which internally renders the "Sessions /
+Automations / Chats" Agent Sessions UI) showing a floating "Sign in to
+use GitHub Copilot" notification
+(`agentSessions/agentHost/agentHostSignedOutModelsNotification.ts`'s
+`AgentHostSignedOutModelsNotificationContribution`) sitting over an
+otherwise-empty panel. Unlike the old `GitHub.copilot`/
+`GitHub.copilot-chat` marketplace extensions (already fully removed by
+`build.sh` before `0001` even existed), this view's one built-in
+harness — `copilotcli`, provided by the `@github/copilot-sdk` package
+imported directly into `platform/agentHost/node/copilot/copilotAgent.ts`
+— was never an extension to begin with; that package's own e2e test
+suite documents it as "always enabled (the CLI is a dev dependency)".
+Confirmed via a direct grep of the `hupi` repo that HUPI's own
+extension doesn't register as an agent-host provider or chat
+participant at all today, so this entire surface is dead weight for
+this build specifically, not a feature HUPI needs — removing it costs
+nothing.
+
+Investigated and rejected: skipping the `registerViewContainer`/
+`registerViews` calls in `chatParticipant.contribution.ts` outright.
+That view's `ChatViewId`/`ChatViewContainerId` constants are referenced
+directly elsewhere in the workbench (reveal/focus commands and
+similar) with no guard for the view never having been registered at
+all — an unknown, unbounded blast radius for a one-off certification
+fix, the same category of risk 0003's own doc comment already rejected
+reskinning the onboarding wizard for. Used instead:
+`IChatEntitlementService.setForceHidden()`, the exact same API
+`AccountPolicyGateContribution`
+(`services/policies/browser/accountPolicyGateContribution.ts`) already
+calls, production-tested, to hide this identical view container for
+enterprise-policy-restricted accounts. The patch adds a new optional
+`hupiDisableNativeChatView` field to `IProductConfiguration`
+(`src/vs/base/common/product.ts`) — set to `true` in
+`product-overlay.json` — and a small new `IWorkbenchContribution`
+(appended to the end of `chat.shared.contribution.ts`, which already
+imports every symbol the new class needs — zero new imports) that
+calls `setForceHidden(true)` once at startup when the flag is set. The
+view container itself still exists (so nothing else in the workbench
+that references its ID breaks), it's just forced invisible via the
+same context-key path upstream's own policy gate already relies on,
+and `chatViewContainer`'s existing `hideIfEmpty: true` then removes it
+from the Auxiliary Bar entirely once its one view's `when` clause
+evaluates false. Verified: the patch applies cleanly in sequence after
+0001-0004 against a fresh `1.137.0` checkout (`git apply --check`, in a
+scratch clone, then reverted — see this repo's own `src-explore`
+scratch checkout convention). **Not yet verified against a real
+build/launch** — `npm ci`/`tsc` weren't run against the patched tree
+(no `node_modules` installed in the scratch checkout used for this),
+so the next full `build/build.sh` run should confirm it compiles and
+that the Chat view container is actually gone from a running build,
+not just that the patch applies.
+
 ## A misdiagnosis worth recording: there was no Windows hang
 
 Several windows-x64 CI runs failed with the smoke test reporting

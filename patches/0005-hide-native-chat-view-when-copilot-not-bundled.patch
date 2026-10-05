@@ -1,0 +1,65 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index 972830f..89abcde 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -272,6 +272,7 @@ export interface IProductConfiguration {
+
+ 	readonly defaultChatAgent: IDefaultChatAgent;
+ 	readonly hupiDisableOnboardingWizard?: boolean;
+ 	readonly hupiDisableChatSetup?: boolean;
++	readonly hupiDisableNativeChatView?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+index 4dc3f87..89abcde 100644
+--- a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
++++ b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+@@ -3399,3 +3399,33 @@ registerSingleton(IAgentHostImportConversationStore, AgentHostImportConversati
+ registerSingleton(ISessionSummaryHoverService, SessionSummaryHoverService, InstantiationType.Delayed);
+
+ ChatWidget.CONTRIBS.push(ChatDynamicVariableModel);
++
++// HUPI Code patch: chatParticipant.contribution.ts's chatViewContainer/
++// chatViewDescriptor ("Chat" in the Auxiliary Bar, internally the
++// "Sessions / Automations / Chats" Agent Sessions UI) isn't an
++// extension's view — it's core workbench chrome, and its one built-in
++// harness (`copilotcli`, the @github/copilot-sdk dependency in
++// platform/agentHost/node/copilot/copilotAgent.ts) is, per that
++// package's own e2e test docs, "always enabled," regardless of whether
++// the Copilot extension is bundled (it never was one here to begin
++// with). With no chat participant registered and that always-present
++// harness signed out, the view still renders — a real, confirmed
++// Microsoft Store certification failure ("Unusable Feature: Sign In"):
++// a floating "Sign in to use GitHub Copilot" notification sitting over
++// a UI surface whose own in-app help text literally invites a prompt
++// ("Pitch your idea") HUPI Code can't fulfil through this path at all.
++// Same reasoning 0002/0003/0004 already apply to every other
++// Copilot-only surface this fork found: a HUPI-native IDE shouldn't
++// ask a user to sign in to a competing, unbundled chat.
++//
++// setForceHidden is the exact mechanism AccountPolicyGateContribution
++// (services/policies/browser/accountPolicyGateContribution.ts) already
++// uses, production-tested, to hide this same view container for
++// enterprise-policy-restricted accounts — reused here for a different
++// reason (no Copilot bundled at all, not a policy restriction) rather
++// than re-deriving a new way to hide it. Chosen over skipping the view
++// container/descriptor registration outright: other workbench code
++// references ChatViewId/ChatViewContainerId directly (reveal/focus
++// commands and similar) with no guard for the view never having been
++// registered at all — an unknown blast radius this avoids entirely,
++// since the container still exists, just forced invisible via the
++// exact context-key path upstream's own policy gate already relies on.
++class HupiHideNativeChatViewContribution extends Disposable implements IWorkbenchContribution {
++	static readonly ID = 'workbench.contrib.hupiHideNativeChatView';
++
++	constructor(
++		@IChatEntitlementService chatEntitlementService: IChatEntitlementService,
++	) {
++		super();
++		if (product.hupiDisableNativeChatView) {
++			chatEntitlementService.setForceHidden(true);
++		}
++	}
++}
++registerWorkbenchContribution2(HupiHideNativeChatViewContribution.ID, HupiHideNativeChatViewContribution, WorkbenchPhase.BlockStartup);
