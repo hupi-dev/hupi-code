@@ -1,9 +1,8 @@
 diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
-index 972830f..89abcde 100644
+index 972830fd..b42b8d01 100644
 --- a/src/vs/base/common/product.ts
 +++ b/src/vs/base/common/product.ts
-@@ -272,6 +272,7 @@ export interface IProductConfiguration {
-
+@@ -273,6 +273,7 @@ export interface IProductConfiguration {
  	readonly defaultChatAgent: IDefaultChatAgent;
  	readonly hupiDisableOnboardingWizard?: boolean;
  	readonly hupiDisableChatSetup?: boolean;
@@ -12,12 +11,12 @@ index 972830f..89abcde 100644
  	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
  	readonly emergencyAlertUrl?: string;
 diff --git a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
-index 4dc3f87..89abcde 100644
+index 4dc3f87b..d03be6ae 100644
 --- a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
 +++ b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
-@@ -3399,3 +3399,33 @@ registerSingleton(IAgentHostImportConversationStore, AgentHostImportConversati
+@@ -3401,3 +3401,47 @@ registerSingleton(IAgentHostImportConversationStore, AgentHostImportConversation
  registerSingleton(ISessionSummaryHoverService, SessionSummaryHoverService, InstantiationType.Delayed);
-
+ 
  ChatWidget.CONTRIBS.push(ChatDynamicVariableModel);
 +
 +// HUPI Code patch: chatParticipant.contribution.ts's chatViewContainer/
