@@ -27,5 +27,6 @@
   "documentationUrl": "https://hupi.dev/docs",
   "hupiDisableOnboardingWizard": true,
   "hupiDisableChatSetup": true,
-  "hupiDisableNativeChatView": true
+  "hupiDisableNativeChatView": true,
+  "hupiDisableCopilotAccountSignIn": true
 }

@@ -205,6 +205,60 @@ so the next full `build/build.sh` run should confirm it compiles and
 that the Chat view container is actually gone from a running build,
 not just that the patch applies.
 
+`patches/0006-remove-copilot-sign-in-from-account-menu.patch` — asked,
+after 0005 shipped, whether any other "Sign in to use GitHub Copilot"
+surface remained — a real, warranted question, not a hypothetical one.
+Grepping every occurrence of that exact string across upstream source
+turned up `src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts`:
+an unconditional `registerAction2` registering a "Sign In" command
+(`AGENTIC_SIGN_IN_COMMAND_ID`) in the Account Menu (the person icon),
+shown via `menu.when: defaultAccountStatus != 'available'` — i.e.
+whenever the user isn't signed into *any* default account, completely
+independent of the Chat view 0005 just hid. Its `run()` calls
+`CHAT_SETUP_ACTION_ID`, which 0004 already made inert (the command is
+registered inside `ChatSetupContribution`'s `registerActions()`, never
+reached once that contribution's constructor returns early) — so
+clicking it today silently does nothing. That's not a fix, though: the
+menu entry itself, labeled "Sign in to use GitHub Copilot," is still
+visibly present and clickable, arguably a worse certification target
+than an absent feature (a named, branded button with no effect). Traced
+two other `IChatInputNotificationService`-based surfaces from the same
+grep pass and ruled them out as already closed: `chatSetupRunner.ts`'s
+dialog-title string is only reachable through `ChatSetupController`,
+itself only ever constructed from inside the same
+`ChatSetupContribution` 0004 disables — no independent instantiation
+site exists. `onboardingVariationA.ts`'s two footer/subtitle strings
+are downstream of `show()`'s own early return, which 0003 already
+added.
+
+One nuance worth recording for any future similar audit: 0005's
+`setForceHidden()` approach only hides the Chat *view container* — it
+does not disable `AgentHostSignedOutModelsNotificationContribution`
+(the notification 0005's own commit message centers on) at the
+contribution level. That contribution pushes its notification through
+`IChatInputNotificationService`, a global singleton whose own doc
+comment states content it's given is rendered by *every* mounted chat
+input widget ("panel, side bar, …") — not just the one in the view 0005
+hides. Quick Chat (`chatQuickInputActions.ts`) is a separate,
+independent entry point that can still mount a chat input widget with
+the view hidden. This wasn't chased down further for this patch (0006
+only covers the Account Menu item that prompted the question), but it's
+the most likely place a *fourth* "Sign in to use GitHub Copilot"
+surface could still appear, if a future audit or certification run
+turns one up.
+
+The patch adds a new optional `hupiDisableCopilotAccountSignIn` field
+to `IProductConfiguration` — set to `true` in `product-overlay.json` —
+and wraps just that one `registerAction2` call in
+`account.contribution.ts` behind it (the adjacent "Sign Out" action,
+the rest of the file's account-widget/dashboard UI, and Settings Sync's
+own separate, non-Copilot sign-in affordance in the same menu are all
+untouched). Verified the same way as 0005: the full `0001`-`0006` chain
+applies cleanly in sequence against a fresh `1.137.0` checkout
+(`git apply --check`, scratch clone, reverted after). Not yet verified
+against a real build/launch, for the same `node_modules`/`tsc`
+availability reason as 0005.
+
 ## A misdiagnosis worth recording: there was no Windows hang
 
 Several windows-x64 CI runs failed with the smoke test reporting

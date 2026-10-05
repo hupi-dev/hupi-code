@@ -63,15 +63,24 @@ accounts — reused for a different reason here (no Copilot bundled, not
 a policy restriction) via a new `hupiDisableNativeChatView` flag, rather
 than risk unregistering the view container outright (other workbench
 code references its ID directly with no guard for it never having been
-registered). Everything else so far is still extension-API-only — a
-lot of what "feels like Cursor" (native chat UI, inline ghost-text
-completions, custom diff panels) is reachable that way, without
-touching upstream source, and that's still the preferred direction
-before reaching for another core patch.
+registered). `patches/0006-*.patch` closes a related gap found by
+auditing every other "Sign in to use GitHub Copilot" string in upstream
+after 0005: the Account Menu (the person icon) unconditionally
+registered its own Copilot sign-in command, independent of the Chat
+view entirely — already a silent no-op by 0004 (the command it calls is
+never registered), but the menu entry itself was still visible
+regardless, which is arguably worse (a named, branded button that does
+nothing when clicked). Skipped via a new `hupiDisableCopilotAccountSignIn`
+flag, same shape as 0005. Everything else so far is still
+extension-API-only — a lot of what "feels like Cursor" (native chat UI,
+inline ghost-text completions, custom diff panels) is reachable that
+way, without touching upstream source, and that's still the preferred
+direction before reaching for another core patch.
 
-**Not done, deliberately deferred**: stripping the Microsoft
-account-sign-in prompt (the person-icon in the Activity Bar that nags
-you to sign in for Settings Sync) and the Marketplace's
+**Not done, deliberately deferred**: stripping the generic Microsoft
+account-sign-in prompt (the same person-icon in the Activity Bar also
+nags you to sign in for Settings Sync, a separate, non-Copilot entry in
+the same Account Menu 0006 touches) and the Marketplace's
 Microsoft-curated "Recommended extensions" nags. Both are cosmetic —
 nothing broken, nothing insecure — but both live in core workbench
 chrome, not in an extension, so the fix is another core patch, not a
