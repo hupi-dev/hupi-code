@@ -1,0 +1,24 @@
+diff --git a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+index 4dc3f87b..887346b3 100644
+--- a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
++++ b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+@@ -3401,3 +3401,19 @@ registerSingleton(IAgentHostImportConversationStore, AgentHostImportConversation
+ registerSingleton(ISessionSummaryHoverService, SessionSummaryHoverService, InstantiationType.Delayed);
+ 
+ ChatWidget.CONTRIBS.push(ChatDynamicVariableModel);
++
++// HUPI Code patch: diagnostic-only command for build/smoke-test.sh.
++// patches/0005's `hupiNativeChatViewHiddenContext` is read by the Chat
++// view's own `when` clause, but there's no public (or proposed)
++// extension API to read an arbitrary context key's current value — so
++// an extension-based smoke-test probe has no way to assert this patch's
++// actual effect the same way 0004/0006 assert a command's absence.
++// `IContextKeyService.getContextKeyValue` already does exactly this
++// internally — this just exposes it, read-only, behind an
++// underscore-prefixed id (same "internal, not a public API" convention
++// upstream's own `_chat.notifyQuestionCarouselAnswer` already uses a few
++// hundred lines above) so a probe extension can call it via
++// `vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden')`.
++CommandsRegistry.registerCommand('_hupi.getContextKeyValue', (accessor: ServicesAccessor, key: string) => {
++	return accessor.get(IContextKeyService).getContextKeyValue(key);
++});

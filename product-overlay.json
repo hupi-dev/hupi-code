@@ -26,5 +26,7 @@
   "requestFeatureUrl": "https://github.com/hupi-dev/hupi-code/issues/new",
   "documentationUrl": "https://hupi.dev/docs",
   "hupiDisableOnboardingWizard": true,
-  "hupiDisableChatSetup": true
+  "hupiDisableChatSetup": true,
+  "hupiDisableNativeChatView": true,
+  "hupiDisableCopilotAccountSignIn": true
 }

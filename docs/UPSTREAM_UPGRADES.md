@@ -147,6 +147,237 @@ patch applies cleanly in sequence after 0001-0003 against a fresh
 exercise this by using the live Chat panel, not just checking that it
 launches.
 
+`patches/0005-hide-native-chat-view-when-copilot-not-bundled.patch` —
+a fourth Phase 3 UX patch, this time against a root cause that isn't
+`product.defaultChatAgent` at all: found from real Microsoft Store
+certification feedback, a first submission came back rejected with
+"Unusable Feature: Sign In" and a screenshot of the native "Chat" view
+container (`chatParticipant.contribution.ts`'s `chatViewContainer`/
+`chatViewDescriptor`, which internally renders the "Sessions /
+Automations / Chats" Agent Sessions UI) showing a floating "Sign in to
+use GitHub Copilot" notification
+(`agentSessions/agentHost/agentHostSignedOutModelsNotification.ts`'s
+`AgentHostSignedOutModelsNotificationContribution`) sitting over an
+otherwise-empty panel. Unlike the old `GitHub.copilot`/
+`GitHub.copilot-chat` marketplace extensions (already fully removed by
+`build.sh` before `0001` even existed), this view's one built-in
+harness — `copilotcli`, provided by the `@github/copilot-sdk` package
+imported directly into `platform/agentHost/node/copilot/copilotAgent.ts`
+— was never an extension to begin with; that package's own e2e test
+suite documents it as "always enabled (the CLI is a dev dependency)".
+Confirmed via a direct grep of the `hupi` repo that HUPI's own
+extension doesn't register as an agent-host provider or chat
+participant at all today, so this entire surface is dead weight for
+this build specifically, not a feature HUPI needs — removing it costs
+nothing.
+
+Investigated and rejected: skipping the `registerViewContainer`/
+`registerViews` calls in `chatParticipant.contribution.ts` outright.
+That view's `ChatViewId`/`ChatViewContainerId` constants are referenced
+directly elsewhere in the workbench (reveal/focus commands and
+similar) with no guard for the view never having been registered at
+all — an unknown, unbounded blast radius for a one-off certification
+fix, the same category of risk 0003's own doc comment already rejected
+reskinning the onboarding wizard for.
+
+**This patch went through three real implementations before the one
+that actually works, two of them caught only by building and running
+the app for real — worth recording in full, since each failure mode is
+a real, general lesson, not specific to this one patch.**
+
+*Attempt 1 — reused `setForceHidden`, appeared to work, didn't.* The
+first version called `IChatEntitlementService.setForceHidden()`, the
+same API `AccountPolicyGateContribution`
+(`services/policies/browser/accountPolicyGateContribution.ts`) already
+calls, production-tested, to hide this identical view container for
+enterprise-policy-restricted accounts — reused here for a different
+reason (no Copilot bundled at all, not a policy restriction). It was
+hand-written directly as a unified diff rather than generated from a
+real edit via `git diff` (the method 0006 already used safely). The
+hunk header for its `chat.shared.contribution.ts` change *undercounted
+its own new-line total* (claimed 33, the real diff body had 47) — `git
+apply` accepted the mismatched header without complaint and silently
+stopped applying after the declared line count, dropping the entire
+contribution class and its registration call, leaving only a dangling,
+syntactically-valid comment block behind. A full `build/build.sh` run
+and `build/smoke-test.sh` pass were recorded against this version
+without catching it: the build genuinely had 0 TypeScript errors
+(there was nothing of this patch's own code left in the file to error
+on), and the smoke test at the time had no assertion for this patch's
+own effect at all (only 0004's). Caught afterward by grepping the
+*real shipped build's own bundled* `workbench.desktop.main.js` for the
+contribution's own ID string — zero matches, confirming the "verified"
+build had never actually contained the fix. The general lesson: "0
+compile errors" proves a file is syntactically valid, not that the
+intended code is present in it — always generate patch hunks from a
+real `git diff` against an actual edit, never hand-count context
+lines, and grep the *shipped artifact* for a patch's own effect before
+trusting an aggregate pass/fail signal.
+
+*Attempt 2 — fixed the hunk, reused `setForceHidden` correctly this
+time, still didn't work.* Regenerated the hunk properly (`git diff`
+against a real edit in the `src-explore` scratch checkout, confirmed
+the contribution class was now genuinely present after a fresh
+`0001`-`0007` apply) and rebuilt. The build again had 0 TypeScript
+errors, and this time a *direct runtime probe* (not just "did it
+compile") read the context key back from the real running app via the
+diagnostic command described in 0007 below — and it came back `false`,
+not `true`. Traced into `chatEntitlementService.ts`:
+`ChatEntitlementContext.setForceHidden()` is a single, shared,
+last-write-wins flag (`_forceHidden`), and `AccountPolicyGateContribution`
+calls it unconditionally on every startup to assert "not
+policy-restricted" (`setForceHidden(false)`) — in a normal,
+non-enterprise build, that call runs and silently overwrites whatever
+this patch had just set, with no accumulation or ownership semantics
+between the two callers. The general lesson: "a production-tested API"
+doesn't mean *safe for a second, independent caller* — check every
+other call site of a shared mutable flag before assuming it's free to
+reuse, not just that it exists and works for its original caller.
+
+*What's actually shipped*: a context key the fix owns exclusively,
+nothing shared. The patch adds a new optional `hupiDisableNativeChatView`
+field to `IProductConfiguration` (`src/vs/base/common/product.ts`) —
+set to `true` in `product-overlay.json` — a new, dedicated
+`hupiNativeChatViewHidden` `RawContextKey` declared directly in
+`chatParticipant.contribution.ts` (ANDed, negated, into
+`chatViewDescriptor`'s existing `when` clause, alongside the existing
+`accountPolicyGateActive.negate()` check), and a small new
+`HupiNativeChatViewHiddenContribution` `IWorkbenchContribution` in that
+same file that binds the key and sets it exactly once, at startup, from
+the product flag — nothing else in the codebase ever touches this key,
+so there is no equivalent contention risk. (A `RawContextKey`'s own
+declared default value turned out *not* to be a safe shortcut either —
+a brief middle iteration tried setting only the default, never calling
+`.bindTo(...).set(...)` anywhere, reasoning that the context-key
+evaluator would fall back to it; the real
+`getContextKeyValue`/`Context.getValue` chain, read directly rather
+than assumed, never consults a `RawContextKey`'s static default at
+all — only an explicit `bindTo` + `set` makes a key's value exist
+anywhere. This is why the key is bound in a real contribution, not left
+to its declared default.) The view container itself still exists (so
+nothing else in the workbench that references its ID breaks), it's
+just forced invisible via its own `when` clause evaluating false, and
+`chatViewContainer`'s existing `hideIfEmpty: true` then removes it from
+the Auxiliary Bar entirely.
+
+**Verified, this time for real, at every level**: the patch applies
+cleanly in sequence after `0001`-`0004` against a fresh `1.137.0`
+checkout; a full `build/build.sh` run (`0001`-`0007` together) compiled
+with 0 TypeScript errors; grepping the *shipped build's own bundled*
+`workbench.desktop.main.js` found the contribution's ID string and a
+3rd `setForceHidden` call site where only the original 2 upstream ones
+existed before (confirming attempt 1's absence and this version's
+presence, by direct comparison); and a standalone probe against the
+real running app, independent of `build/smoke-test.sh`'s own assertion,
+read the context key back and got genuine `raw:true typeof:boolean` —
+not inferred from "it didn't crash," read directly.
+
+`patches/0006-remove-copilot-sign-in-from-account-menu.patch` — asked,
+after 0005 shipped, whether any other "Sign in to use GitHub Copilot"
+surface remained — a real, warranted question, not a hypothetical one.
+Grepping every occurrence of that exact string across upstream source
+turned up `src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts`:
+an unconditional `registerAction2` registering a "Sign In" command
+(`AGENTIC_SIGN_IN_COMMAND_ID`) in the Account Menu (the person icon),
+shown via `menu.when: defaultAccountStatus != 'available'` — i.e.
+whenever the user isn't signed into *any* default account, completely
+independent of the Chat view 0005 just hid. Its `run()` calls
+`CHAT_SETUP_ACTION_ID`, which 0004 already made inert (the command is
+registered inside `ChatSetupContribution`'s `registerActions()`, never
+reached once that contribution's constructor returns early) — so
+clicking it today silently does nothing. That's not a fix, though: the
+menu entry itself, labeled "Sign in to use GitHub Copilot," is still
+visibly present and clickable, arguably a worse certification target
+than an absent feature (a named, branded button with no effect). Traced
+two other `IChatInputNotificationService`-based surfaces from the same
+grep pass and ruled them out as already closed: `chatSetupRunner.ts`'s
+dialog-title string is only reachable through `ChatSetupController`,
+itself only ever constructed from inside the same
+`ChatSetupContribution` 0004 disables — no independent instantiation
+site exists. `onboardingVariationA.ts`'s two footer/subtitle strings
+are downstream of `show()`'s own early return, which 0003 already
+added.
+
+**Follow-up, chased down rather than left open**: 0005 only hides the
+Chat *view container* itself — it does not disable
+`AgentHostSignedOutModelsNotificationContribution` at the contribution
+level, and that contribution's notification is pushed through
+`IChatInputNotificationService`, a global singleton whose own doc
+comment states content it's given is rendered by *every* mounted chat
+input widget ("panel, side bar, …"), not just the one in the view 0005
+hides. Quick Chat (`chatQuickInputActions.ts`) is a separate,
+independent entry point that can still mount a chat input widget with
+the view hidden, which raised a real question: could Quick Chat (or any
+other chat input) still show this notification?
+
+Traced and ruled out. The notification scopes itself explicitly —
+`agentHostSignedOutModelsNotification.ts`'s own `_createNotification()`
+sets `sessionTypes: [SessionType.AgentHostCopilot]`, and
+`chatInputNotificationService.ts`'s `isChatInputNotificationApplicableToSessionType`
+only renders a notification in a widget whose own session type is in
+that list (or the notification sets no `sessionTypes` at all — this one
+does). `chatSessionsService.ts` separately defines `localChatSessionType
+= SessionType.Local` as "the session type used for local agent chat
+sessions" — i.e. ordinary extension-backed chat (what HUPI's own
+extension provides) runs as `SessionType.Local`, a different type
+entirely from `SessionType.AgentHostCopilot`. `ChatContextKeys.enabled`
+(Quick Chat's own precondition) is generic — true whenever any
+extension registers a default chat agent with a real implementation,
+not Copilot-specific — and nothing in `chatQuickInputActions.ts` or the
+generic `chatNewActions.ts` (which has a distinct, separate
+`workbench.action.chat.newLocalChat` command) prompts for or switches
+session type. The only identified way to actually reach an
+`AgentHostCopilot`-typed session is the Agent Sessions view's own
+session-type picker — which lives inside the view 0005 already hides,
+with no other command found that creates or switches to that session
+type independently. No fourth surface found; not fixing anything
+further here since there's nothing left to fix.
+
+The patch adds a new optional `hupiDisableCopilotAccountSignIn` field
+to `IProductConfiguration` — set to `true` in `product-overlay.json` —
+and wraps just that one `registerAction2` call in
+`account.contribution.ts` behind it (the adjacent "Sign Out" action,
+the rest of the file's account-widget/dashboard UI, and Settings Sync's
+own separate, non-Copilot sign-in affordance in the same menu are all
+untouched). Verified the same way as 0005: the full `0001`-`0006` chain
+applies cleanly in sequence against a fresh `1.137.0` checkout
+(`git apply --check`, scratch clone, reverted after), and — same as
+0005 — a full `build/build.sh` + `build/smoke-test.sh` run confirmed it
+compiles with 0 TypeScript errors and the built app still starts and
+loads `hupi.hupi-vscode`. This patch's own effect is a command-presence
+question (0005's needed a context-key read instead — see its own entry
+above for why, and for a real case where "0 TypeScript errors" and "the
+smoke test passed" did *not* mean the fix actually worked) —
+`smoke-test.sh` now also asserts
+`workbench.action.agenticSignIn` (`AGENTIC_SIGN_IN_COMMAND_ID`,
+`src/vs/sessions/common/sessionCommands.ts`) is absent from
+`vscode.commands.getCommands(true)`, the exact same technique 0004's
+own check already established, confirmed against the real build from
+this same run (checked with a standalone probe before wiring the
+assertion in, not just trusted because the script didn't throw).
+
+`patches/0007-expose-context-key-read-for-smoke-test-probe.patch` —
+diagnostic-only, no user-facing effect, added directly because of
+0005's own saga above. Registers one internal, underscore-prefixed
+command, `_hupi.getContextKeyValue` (appended to the end of
+`chat.shared.contribution.ts`, same file 0005's very first, broken
+attempt touched — same "not a public API" convention upstream's own
+`_chat.notifyQuestionCarouselAnswer` a few hundred lines above already
+uses), that wraps `IContextKeyService.getContextKeyValue` directly. No
+public or proposed extension API reads an arbitrary context key's live
+value, so without this, `build/smoke-test.sh`'s probe extension has no
+way to ask a real running app what a context key's value actually is —
+which is exactly the gap that let 0005's first implementation ship
+with 0 TypeScript errors and a passing smoke test despite doing
+nothing at all. `build/smoke-test.sh` now calls it to assert
+`hupiNativeChatViewHidden` (0005's own key) is `true`. Verified the
+full `0001`-`0007` chain applies cleanly in sequence against a fresh
+`1.137.0` checkout, and — this one especially worth saying plainly —
+*used* to catch both of 0005's real bugs before arriving at the version
+that actually works: this patch is not theoretical, it is the specific
+tool that made the rest of 0005's entry above possible to write
+honestly.
+
 ## A misdiagnosis worth recording: there was no Windows hang
 
 Several windows-x64 CI runs failed with the smoke test reporting
@@ -220,3 +451,22 @@ the one `security import` actually understands) — same key, same
 certificate, same password, only the container's own encryption changed.
 Worth remembering for any future Apple certificate this repo ever needs
 to re-issue or rotate.
+
+## Real build + smoke test history for 0005/0006/0007 (2026-10-05)
+
+Superseded by the fuller, corrected account now folded directly into
+0005's, 0006's, and 0007's own entries above (0005's in particular
+documents two real, build-verification-only-caught failures before the
+version that actually works) — kept this section only as a pointer so
+a reader scanning dates doesn't wonder whether the day's work went
+undocumented. One finding from that day worth repeating here since it's
+about the build process itself, not any one patch: `build.sh`'s own
+already-documented `nvm.sh`-under-`set -e` gotcha (sourcing it
+non-interactively aborts the whole script silently, right after
+"installing the exact Node version this tag requires," exit code 3, no
+error text) reproduced exactly as described on this exact tag/
+environment combination — the documented workaround (temporarily
+rename `~/.nvm/nvm.sh` out of the way, with the target Node version's
+`bin` directory already on `PATH` directly, then restore it
+immediately after) still works. Not a new finding, just a fresh
+confirmation it's still accurate.

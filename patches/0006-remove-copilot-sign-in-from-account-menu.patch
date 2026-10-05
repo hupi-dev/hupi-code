@@ -1,0 +1,81 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index b42b8d01..d57319b3 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -274,6 +274,7 @@ export interface IProductConfiguration {
+ 	readonly hupiDisableOnboardingWizard?: boolean;
+ 	readonly hupiDisableChatSetup?: boolean;
+ 	readonly hupiDisableNativeChatView?: boolean;
++	readonly hupiDisableCopilotAccountSignIn?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts b/src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts
+index 41e9af72..e93f4406 100644
+--- a/src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts
++++ b/src/vs/sessions/contrib/accountMenu/browser/account.contribution.ts
+@@ -37,6 +37,7 @@ import { ThemeIcon } from '../../../../base/common/themables.js';
+ import { getAccountProfileImageUrl, getAccountTitleBarBadgeKey, getAccountTitleBarState, IAccountTitleBarState, resolveAccountInfo } from '../../../browser/accountTitleBarState.js';
+ import { observeAllowSignedOutWhenUsable } from '../../../browser/sessionsAuthGate.js';
+ import { IsPhoneLayoutContext, SessionsWelcomeVisibleContext } from '../../../common/contextkeys.js';
++import product from '../../../../platform/product/common/product.js';
+ import { IsAuxiliaryWindowContext } from '../../../../workbench/common/contextkeys.js';
+ import { IAuthenticationAccessService } from '../../../../workbench/services/authentication/browser/authenticationAccessService.js';
+ import { IAuthenticationUsageService } from '../../../../workbench/services/authentication/browser/authenticationUsageService.js';
+@@ -85,25 +86,37 @@ registerUpdateTitleBarMenuPlacement(Menus.TitleBarLeftLayout, {
+ 	),
+ });
+ 
+-// Sign In (shown when signed out)
+-registerAction2(class extends Action2 {
+-	constructor() {
+-		super({
+-			id: AGENTIC_SIGN_IN_COMMAND_ID,
+-			title: localize2('signIn', "Sign in to use GitHub Copilot"),
+-			icon: Codicon.signIn,
+-			menu: {
+-				id: AccountMenu,
+-				when: ContextKeyExpr.notEquals('defaultAccountStatus', 'available'),
+-				group: '1_account',
+-				order: 1,
+-			}
+-		});
+-	}
+-	async run(accessor: ServicesAccessor): Promise<void> {
+-		await accessor.get(ICommandService).executeCommand(CHAT_SETUP_ACTION_ID);
+-	}
+-});
++// HUPI Code patch: this command's only effect was opening Copilot's own
++// sign-in flow (CHAT_SETUP_ACTION_ID) — already made a silent no-op by
++// patches/0004 (ChatSetupContribution, which registers that command, is
++// skipped outright), but the "Sign in to use GitHub Copilot" menu entry
++// itself was still unconditionally registered here regardless, visible
++// in the Account Menu (the person icon) whenever signed out — a worse
++// outcome than just not being there (a named, branded sign-in button
++// that silently does nothing when clicked). Same reasoning as
++// 0002/0003/0004/0005: a HUPI-native IDE shouldn't surface a sign-in
++// affordance for a competing, unbundled chat.
++if (!product.hupiDisableCopilotAccountSignIn) {
++	// Sign In (shown when signed out)
++	registerAction2(class extends Action2 {
++		constructor() {
++			super({
++				id: AGENTIC_SIGN_IN_COMMAND_ID,
++				title: localize2('signIn', "Sign in to use GitHub Copilot"),
++				icon: Codicon.signIn,
++				menu: {
++					id: AccountMenu,
++					when: ContextKeyExpr.notEquals('defaultAccountStatus', 'available'),
++					group: '1_account',
++					order: 1,
++				}
++			});
++		}
++		async run(accessor: ServicesAccessor): Promise<void> {
++			await accessor.get(ICommandService).executeCommand(CHAT_SETUP_ACTION_ID);
++		}
++	});
++}
+ 
+ // Sign Out (shown when signed in)
+ registerAction2(class extends Action2 {
