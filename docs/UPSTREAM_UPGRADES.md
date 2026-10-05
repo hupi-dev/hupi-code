@@ -231,21 +231,40 @@ site exists. `onboardingVariationA.ts`'s two footer/subtitle strings
 are downstream of `show()`'s own early return, which 0003 already
 added.
 
-One nuance worth recording for any future similar audit: 0005's
+**Follow-up, chased down rather than left open**: 0005's
 `setForceHidden()` approach only hides the Chat *view container* — it
-does not disable `AgentHostSignedOutModelsNotificationContribution`
-(the notification 0005's own commit message centers on) at the
-contribution level. That contribution pushes its notification through
-`IChatInputNotificationService`, a global singleton whose own doc
-comment states content it's given is rendered by *every* mounted chat
-input widget ("panel, side bar, …") — not just the one in the view 0005
-hides. Quick Chat (`chatQuickInputActions.ts`) is a separate,
+does not disable `AgentHostSignedOutModelsNotificationContribution` at
+the contribution level, and that contribution's notification is pushed
+through `IChatInputNotificationService`, a global singleton whose own
+doc comment states content it's given is rendered by *every* mounted
+chat input widget ("panel, side bar, …"), not just the one in the view
+0005 hides. Quick Chat (`chatQuickInputActions.ts`) is a separate,
 independent entry point that can still mount a chat input widget with
-the view hidden. This wasn't chased down further for this patch (0006
-only covers the Account Menu item that prompted the question), but it's
-the most likely place a *fourth* "Sign in to use GitHub Copilot"
-surface could still appear, if a future audit or certification run
-turns one up.
+the view hidden, which raised a real question: could Quick Chat (or any
+other chat input) still show this notification?
+
+Traced and ruled out. The notification scopes itself explicitly —
+`agentHostSignedOutModelsNotification.ts`'s own `_createNotification()`
+sets `sessionTypes: [SessionType.AgentHostCopilot]`, and
+`chatInputNotificationService.ts`'s `isChatInputNotificationApplicableToSessionType`
+only renders a notification in a widget whose own session type is in
+that list (or the notification sets no `sessionTypes` at all — this one
+does). `chatSessionsService.ts` separately defines `localChatSessionType
+= SessionType.Local` as "the session type used for local agent chat
+sessions" — i.e. ordinary extension-backed chat (what HUPI's own
+extension provides) runs as `SessionType.Local`, a different type
+entirely from `SessionType.AgentHostCopilot`. `ChatContextKeys.enabled`
+(Quick Chat's own precondition) is generic — true whenever any
+extension registers a default chat agent with a real implementation,
+not Copilot-specific — and nothing in `chatQuickInputActions.ts` or the
+generic `chatNewActions.ts` (which has a distinct, separate
+`workbench.action.chat.newLocalChat` command) prompts for or switches
+session type. The only identified way to actually reach an
+`AgentHostCopilot`-typed session is the Agent Sessions view's own
+session-type picker — which lives inside the view 0005 already hides,
+with no other command found that creates or switches to that session
+type independently. No fourth surface found; not fixing anything
+further here since there's nothing left to fix.
 
 The patch adds a new optional `hupiDisableCopilotAccountSignIn` field
 to `IProductConfiguration` — set to `true` in `product-overlay.json` —
