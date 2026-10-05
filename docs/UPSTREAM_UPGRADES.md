@@ -198,12 +198,15 @@ from the Auxiliary Bar entirely once its one view's `when` clause
 evaluates false. Verified: the patch applies cleanly in sequence after
 0001-0004 against a fresh `1.137.0` checkout (`git apply --check`, in a
 scratch clone, then reverted — see this repo's own `src-explore`
-scratch checkout convention). **Not yet verified against a real
-build/launch** — `npm ci`/`tsc` weren't run against the patched tree
-(no `node_modules` installed in the scratch checkout used for this),
-so the next full `build/build.sh` run should confirm it compiles and
-that the Chat view container is actually gone from a running build,
-not just that the patch applies.
+scratch checkout convention). **Verified against a real build, not just
+source**: a full `build/build.sh` run (0001-0006 together) compiled this
+new contribution with 0 TypeScript errors, and `build/smoke-test.sh`
+confirmed the resulting app actually launches and loads
+`hupi.hupi-vscode` as a built-in. The smoke test's own existing
+assertion only checks 0004's `workbench.action.chat.triggerSetup`
+absence, not this patch's effect directly (the Chat view's own
+visibility isn't something the probe extension currently inspects) —
+worth adding an explicit assertion for this and 0006 in a follow-up.
 
 `patches/0006-remove-copilot-sign-in-from-account-menu.patch` — asked,
 after 0005 shipped, whether any other "Sign in to use GitHub Copilot"
@@ -274,9 +277,12 @@ the rest of the file's account-widget/dashboard UI, and Settings Sync's
 own separate, non-Copilot sign-in affordance in the same menu are all
 untouched). Verified the same way as 0005: the full `0001`-`0006` chain
 applies cleanly in sequence against a fresh `1.137.0` checkout
-(`git apply --check`, scratch clone, reverted after). Not yet verified
-against a real build/launch, for the same `node_modules`/`tsc`
-availability reason as 0005.
+(`git apply --check`, scratch clone, reverted after), and — same as
+0005 — a full `build/build.sh` + `build/smoke-test.sh` run confirmed it
+compiles with 0 TypeScript errors and the built app still starts and
+loads `hupi.hupi-vscode`. Like 0005, the smoke test's existing assertion
+doesn't directly check this patch's own effect (the Account Menu entry
+being gone) — same follow-up noted there applies here too.
 
 ## A misdiagnosis worth recording: there was no Windows hang
 
@@ -351,3 +357,50 @@ the one `security import` actually understands) — same key, same
 certificate, same password, only the container's own encryption changed.
 Worth remembering for any future Apple certificate this repo ever needs
 to re-issue or rotate.
+
+## Real build + smoke test confirming 0005/0006 (2026-10-05)
+
+Ran `build/build.sh` end to end against the full `0001`-`0006` patch
+stack (a fresh `1.137.0` clone, `OUT_DIR`/`WORKROOT` outside any
+noexec-mounted path) to close out both patches' own "not yet verified
+against a real build" caveats. Hit `build.sh`'s own already-documented
+`nvm.sh`-under-`set -e` gotcha exactly as described (log stopped dead
+right after "installing the exact Node version this tag requires," exit
+code 3, no error text) — confirmed the fix is still the same one the
+script's own comment already gives: temporarily rename `~/.nvm/nvm.sh`
+out of the way (with the target Node version's own `bin` directory
+already on `PATH` directly, bypassing `nvm.sh` entirely) so `build.sh`
+falls through to its "whatever `node` is on PATH" branch, then restore
+`nvm.sh` immediately after. Not a new finding — recording that it's
+still accurate on this exact tag/environment combination.
+
+With that workaround, the real build succeeded cleanly: all six patches
+applied with `git apply` (no fuzz, no rejects), the HUPI extension
+built, and `gulp vscode-linux-x64-min` finished with 0 TypeScript errors
+across every extension and the core workbench/sessions bundles —
+including `chat.shared.contribution.ts`'s new
+`HupiHideNativeChatViewContribution` (0005) and the wrapped
+`registerAction2` call in `account.contribution.ts` (0006), both
+previously only checked by `git apply --check`, never actually
+type-checked. `build/smoke-test.sh` against the resulting
+`VSCode-linux-x64` build passed: the app launches headlessly under
+`xvfb-run`, `hupi.hupi-vscode` loads as a built-in extension, and
+`workbench.action.chat.triggerSetup` is confirmed absent (0004's own
+existing assertion).
+
+**What this does and doesn't confirm**: compiles clean and runs without
+crashing, for the whole patch stack — a real, meaningful step up from
+"the patch applies." It does *not* yet directly assert 0005's or 0006's
+own specific behavior (Chat view actually invisible in the UI; Account
+Menu's sign-in entry actually gone) — the smoke test's probe extension
+only checks the one command-absence assertion 0004 already added. A
+real improvement for next time: extend the probe to also assert
+`workbench.action.agenticSignIn` (0006's command ID, from
+`src/vs/sessions/common/sessionCommands.ts`) is absent from
+`vscode.commands.getCommands(true)`, the same proven technique already
+used for 0004. 0005 is harder to check this same way (hiding a view via
+a context key isn't a command-presence question) and wasn't attempted
+here — a non-headless, visual check (or a context-key-reading probe,
+if the extension API exposes one) would be the next thing to try if
+this needs a stronger automated guarantee than a real human launching
+it and looking.
