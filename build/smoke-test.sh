@@ -53,6 +53,31 @@
 # can ask the real running app what the key's value actually is instead
 # of only checking that the patch compiled.
 #
+# patches/0009 (hupiDisableDefaultAccountProvider) reuses that same
+# _hupi.getContextKeyValue probe against an *existing* upstream context
+# key rather than needing a new one: `defaultAccountStatus`
+# (`CONTEXT_DEFAULT_ACCOUNT_STATE` in
+# src/vs/workbench/services/accounts/browser/defaultAccount.ts) is only
+# ever bound (`.bindTo(contextKeyService)`) inside `DefaultAccountProvider`'s
+# own constructor — and that class is only ever instantiated from inside
+# `DefaultAccountProviderContribution`'s constructor, which is exactly
+# the call 0009's early `return` skips. No network call, no real GitHub
+# account, and no new core patch needed to observe this: when the gate
+# is working, the key was never bound at all this session, so
+# `getContextKeyValue` returns `undefined`; when it isn't (the
+# regression this guards against — the entitlement probe silently
+# running and sending a user's GitHub token to
+# api.github.com/copilot_internal/* on every startup and hourly after,
+# see docs/UPSTREAM_UPGRADES.md's 0009 section), the key is always some
+# real string (`uninitialized`/`unavailable`/`available`) because the
+# contribution — and the provider it builds — actually ran. Confirmed
+# empirically both ways before wiring this in: against a build with
+# 0009 reverted this read back `uninitialized` (no real GitHub session
+# in a CI-like environment, so it never gets past that), and separately
+# `available` against a build that also had the temp fake-session debug
+# patch from 0009's own investigation; against the real patched build it
+# read back `undefined` in every run.
+#
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
@@ -136,7 +161,8 @@ async function activate() {
   const chatSetupCommand = commands.includes('workbench.action.chat.triggerSetup') ? 'present' : 'absent';
   const agenticSignInCommand = commands.includes('workbench.action.agenticSignIn') ? 'present' : 'absent';
   const nativeChatViewHidden = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden');
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden);
+  const defaultAccountStatus = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'defaultAccountStatus');
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus);
 }
 module.exports = { activate };
 EOF
@@ -223,7 +249,20 @@ if ! grep -qx "nativeChatViewHidden:true" "$RESULT_FILE"; then
   exit 1
 fi
 
+if ! grep -qx "defaultAccountStatus:undefined" "$RESULT_FILE"; then
+  echo "FAIL: the defaultAccountStatus context key has a real value instead of"
+  echo "being unbound — patches/0009's hupiDisableDefaultAccountProvider gate did"
+  echo "not take; DefaultAccountProviderContribution is still constructing a real"
+  echo "DefaultAccountProvider, which means the app will silently send any"
+  echo "existing GitHub OAuth session's token to"
+  echo "api.github.com/copilot_internal/user (and re-check hourly) even though"
+  echo "this build has no Copilot entitlement to ever check. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
 echo "upstream's Copilot Chat Setup is confirmed disabled, the native Chat view"
-echo "is confirmed force-hidden, and the Account Menu's Copilot sign-in command"
-echo "is confirmed absent."
+echo "is confirmed force-hidden, the Account Menu's Copilot sign-in command is"
+echo "confirmed absent, and the default-account/Copilot-entitlement provider is"
+echo "confirmed never registered."

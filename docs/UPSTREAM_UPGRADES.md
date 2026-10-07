@@ -470,3 +470,560 @@ rename `~/.nvm/nvm.sh` out of the way, with the target Node version's
 `bin` directory already on `PATH` directly, then restore it
 immediately after) still works. Not a new finding, just a fresh
 confirmation it's still accurate.
+
+`patches/0008-restore-all-individually-closed-windows-not-just-last.patch`
+— the first patch in this repo against real Microsoft Partner Center
+certification feedback (not Microsoft Store; a separate review channel),
+not a Copilot-removal patch, and not something found by reading source
+in the abstract — found by actually reproducing the report against a
+real running build, which changed the diagnosis completely partway
+through.
+
+**The report, verbatim**: "Unusable Feature: Primary Functionality - When
+users close the code editor window first, before the Sessions window,
+they cannot reopen the code editor even after relaunching the product."
+Observed on real Windows hardware (Surface Laptop 5, Dell Inspiron
+13-5379).
+
+**Starting hypothesis — plausible, and wrong.** `lifecycleMainService.ts`'s
+`registerWindow()` tracks a shared `windowCounter` across every
+registered main window; its `'closed'` handler fires
+`fireOnWillShutdown(QUIT)` the instant `windowCounter` hits 0 on
+non-macOS. Separately, `registerAuxWindow()` tracks auxiliary (popped-out)
+windows on a completely different path that never touches
+`windowCounter` at all. The obvious hypothesis: if the Sessions window is
+some kind of auxiliary window rather than a real registered main window,
+closing the one real main window (the editor) would drop `windowCounter`
+to 0 and fire a premature shutdown — persisting "0 windows to restore"
+while the Sessions window is still visibly open on screen.
+
+This turned out to be **wrong**, confirmed two ways before writing a
+single line of the actual fix. First, by reading source: `windowImpl.ts`
+shows the Sessions/"Agents" window is constructed as a plain `CodeWindow`
+— the exact same class and `registerWindow()` path as an editor window —
+distinguished only by an `isSessionsWindow` boolean on its
+`INativeWindowConfiguration` that picks which HTML entry point to load
+(`vs/sessions/electron-browser/sessions.html` vs. the normal
+`workbench.html`); `windowsMainService.ts` sets that flag by checking
+whether the window's workspace resolves to a dedicated, stable pseudo-
+workspace file (`<user-data-dir>/User/agent-sessions.code-workspace`,
+`IEnvironmentService.agentSessionsWorkspace`, created on first use via
+`ensureAgentsWindow()`). Nothing about it is an auxiliary window. Second,
+and more convincingly, by actually running it: with the editor and
+Sessions windows both open under `--log trace`, closing the editor window
+first produced `Lifecycle#window.on('closed') - window ID 1` with **no**
+`Lifecycle#onWillShutdown.fire()` following it — exactly the correct,
+non-premature behavior, because the Sessions window (window ID 2) was
+still alive and `windowCounter` was still 1. The aux-window theory would
+have predicted a premature fire here; it didn't happen.
+
+**Reproducing it for real, including the tooling dead ends.** Getting a
+faithful "user clicks the window's own X button" close, rather than
+something that only looks like one, took three failed approaches before
+one that actually exercised the real code path:
+
+- `curl http://localhost:<port>/json/close/<targetId>` (Chrome DevTools
+  Protocol's `Target.closeTarget`, HTTP shortcut) closed the window
+  instantly, but `--log trace` showed only
+  `Lifecycle#window.on('closed')` — no `'close'` event, no
+  `Lifecycle#unload()`, no `Lifecycle#onBeforeCloseWindow.fire()`. This
+  bypasses Electron's own `BrowserWindow` close sequence entirely, which
+  means it also bypasses `windowsStateHandler.ts`'s
+  `onBeforeCloseWindow()` listener — exactly the code this bug lives in.
+  Using it would have silently tested nothing.
+- CDP's `Page.close` (sent over the raw WebSocket instead of the HTTP
+  shortcut, after adding `--remote-allow-origins=*` so the handshake
+  wasn't rejected) is documented as running `beforeunload` handlers —
+  still produced the identical bare `'closed'`-only log signature. Same
+  dead end, just a slower way to find it.
+- `xdotool windowclose <id>` (send a real `WM_DELETE_WINDOW` ClientMessage
+  to the X11 window, the literal mechanism behind clicking a title bar's
+  close button) produced no effect at all and no log output under this
+  environment's window-manager-less `Xvfb` — never root-caused further
+  since the next approach worked and this one added nothing.
+
+The approach that actually worked: VS Code's own `workbench.action.closeWindow`
+command (`Ctrl+Shift+W` / `Alt+F4`, dispatched for real via CDP
+`Input.dispatchKeyEvent` against the focused renderer) reliably produced
+the complete, real sequence —
+`Lifecycle#window.on('close')` → `Lifecycle#unload()` →
+`Lifecycle#onBeforeCloseWindow.fire()` → `Lifecycle#window.on('closed')`
+— for the **editor** window. It did nothing at all against the
+**Sessions** window: `sessions.common.main.ts` imports a leaner
+`workbench/browser/actions/windowActions.js` that doesn't include the
+electron-specific `CloseWindowAction` the editor's workbench registers,
+so that command and its keybinding simply don't exist there. Sessions'
+own custom titlebar (`sessions/electron-browser/parts/titlebarPart.ts`)
+wires its close icon's click handler directly to
+`nativeHostService.closeWindow()` instead — but that icon
+(`.window-icon.window-close`) only renders when
+`useWindowControlsOverlay()` is false, and this environment's default
+window chrome uses Electron's native Window Controls Overlay (confirmed
+live: the DOM showed `.window-controls-container.wco-enabled` with no
+close-icon child at all) — a real OS-compositor-drawn control with no DOM
+element for CDP to click. Setting `window.controlsStyle: "custom"` in the
+scratch profile's `settings.json` (the same setting `desktop.contribution.ts`
+exposes, "changes require a full restart to apply" per its own
+description) forced the DOM-rendered close icon to render for both
+windows, making `document.querySelector('.window-icon.window-close').click()`
+a faithful, real click on the actual close affordance for either window
+type.
+
+**The real mechanism, confirmed live.** With both windows open, closing
+the editor first (via its real close button) produced the expected
+"nothing happens yet" trace — `windowCounter` still 1, no shutdown. Then
+closing the Sessions window (now the last one) produced the full real
+shutdown sequence, and the exact
+`[WindowsStateHandler] onBeforeShutdown { ... }` trace line it logs
+showed:
+```
+lastActiveWindow: { workspaceIdentifier: { configURIPath: '.../User/agent-sessions.code-workspace' }, ... },
+lastPluginDevelopmentHostWindow: undefined,
+openedWindows: []
+```
+— the persisted `storage.json` matched exactly. The editor's own
+workspace (`testproject`) does not appear anywhere in the final state.
+Root cause, in `windowsStateHandler.ts`: `onBeforeCloseWindow()` only
+ever remembers one single window's state as `lastClosedState` — and only
+when `windowsMainService.getWindowCount() === 1`, i.e. whichever window
+happens to be the very last one standing right before it, too, closes.
+`saveWindowsState()`'s broader "all windows" snapshot (`openedWindows`,
+used to support `window.restoreWindows: 'all'`, the default) is only
+populated from `windowsMainService.getWindows()` live at the moment
+`onBeforeShutdown` actually runs — and on Windows/Linux, by the time the
+*last* window's `'closed'` event fires `onWillShutdown` → `onBeforeShutdown`,
+every window (including ones closed earlier) is already gone from that
+list, so it's always empty in this sequential-close scenario. Closing the
+editor first, then Sessions, means: the editor's close never gets
+remembered anywhere (`getWindowCount()` was 2, not 1, when it closed),
+and the Sessions window's close stamps *its own* pseudo-workspace as the
+sole `lastActiveWindow`, with `openedWindows` empty. On relaunch (default
+`restoreWindows: 'all'`), `doGetPathsFromLastSession()` has only that one
+entry to work with — it resolves successfully (the pseudo-workspace file
+is real and persists on disk), so the app reopens **only** the
+Sessions/"Agents" window. The editor's project is not merely
+de-prioritized; its reference is gone from persisted state entirely, and
+no further relaunch brings it back. Confirmed live: after the sequence
+above, relaunching against the same `--user-data-dir` with no CLI
+arguments opened exactly one window, titled "Agents," loading
+`sessions.html` — never the editor, never the `testproject` folder.
+
+This is **not** actually specific to the Sessions window, or even to
+`isSessionsWindow` — it's a latent gap in `windowsStateHandler.ts`'s
+single-slot "last individually-closed window" memory that would equally
+lose an earlier-closed *editor* window's state if a user closed two
+ordinary project windows one at a time down to zero (as opposed to one
+batched `Quit`). The reason this reaches end users here, and reads as a
+broken product rather than expected behavior, is specific to how Sessions
+is used: it is easy to pop open via `--agents` / `Ctrl+Shift+A` /
+"Open Agents Window", is not something most users think of as "a window I
+need to manage," and routinely gets left open in the background while the
+user closes their actual work. The certification report's "Tested
+Without Issue: None" is consistent with that — this reproduces every
+time the close order happens to go editor-then-Sessions, not
+intermittently.
+
+**The fix.** Track every individually-closed non-extension-host window's
+state (`lastClosedWindows: IWindowState[]`, not just the existing single
+`lastClosedState`), appended in `onBeforeCloseWindow()` regardless of
+`getWindowCount()`, cleared whenever a new window opens (same trigger
+that already clears `lastClosedState`). In `saveWindowsState()`, when
+`getWindowCount()` is 0 at final shutdown and more than one window closed
+this way, use that accumulated list as `openedWindows` instead of leaving
+it empty — the same `openedWindows` field upstream already populates from
+`getWindows()` directly when two or more windows are simultaneously
+*still open* (`getWindowCount() > 1`); this just extends that existing,
+already-shipped-and-trusted mechanism to the sequential-close-to-zero
+case it previously had no coverage for at all. `lastActiveWindow` keeps
+its existing meaning and computation unchanged (already-existing upstream
+behavior already lets `lastActiveWindow` duplicate an entry that's also
+present in `openedWindows` for the `getWindowCount() > 1` case — this
+fix's fallback list follows that same precedent deliberately, rather than
+inventing new dedup semantics).
+
+Rejected approach: making the non-macOS premature-shutdown check in
+`lifecycleMainService.ts` (`registerWindow`'s `'closed'` handler) also
+account for other real or auxiliary windows still open. This was the
+natural shape the starting hypothesis pointed at, but there is no bug
+there to fix — `windowCounter` already behaves correctly for the Sessions
+window specifically because it's a real registered main window, confirmed
+live above. Patching code that already works correctly, for a theory the
+live trace had already ruled out, would have been exactly the kind of
+unverified, plausible-sounding fix this file's own `smoke-test.sh` war
+story (above) warns against.
+
+**Verified against a real rebuilt, rerun instance** (not just "it
+compiles"): confirmed the full `0001`-`0008` chain applies cleanly in
+sequence against a fresh `1.137.0` checkout; ran `build/build.sh` to
+completion producing a real `hupi-code` Linux binary; then repeated the
+*exact* repro sequence above against the newly built, patched app with a
+fresh scratch `--user-data-dir` — open editor + Sessions window, close
+editor first (real close-button click, confirmed via the full
+`'close'`→`unload`→`onBeforeCloseWindow`→`'closed'` trace), close
+Sessions second (the last window), inspect the resulting
+`[WindowsStateHandler] onBeforeShutdown { ... }` trace line and persisted
+`storage.json`, then relaunch against the same `--user-data-dir` with no
+CLI arguments and check which window(s) actually come back. See the
+dated follow-up note immediately below for the before/after result of
+that specific run.
+
+## 0008 before/after build-verification result (2026-10-06)
+
+Build: `build/build.sh` with `HUPI_EXTENSION_DIR=/home/samuel/repos/hupi/vscode-extension`
+(the default `../hupi/vscode-extension` relative path doesn't resolve
+from this checkout's actual location — a local environment detail, not
+a repo issue) against the `0001`-`0008` chain, `UPSTREAM_TAG=1.137.0`.
+79 `tsgo`/typecheck passes in the build log, all "with 0 errors"; grepped
+the shipped `resources/app/out/main.js` directly for `lastClosedWindows`
+(the patch's own new field name) and found it present — confirming, the
+same way 0005's saga insists on, that the fix is actually *in* the built
+artifact and not just absent-but-compiling.
+
+**Before (pre-0008, `out11`, built from `0001`-`0007` only)**: editor +
+Agents window open, closed editor first (real close-button click,
+confirmed `'close'`→`unload`→`onBeforeCloseWindow`→`'closed'` trace),
+closed Agents second (last window, triggered real
+`onWillShutdown`/shutdown). The logged
+`[WindowsStateHandler] onBeforeShutdown { ... }` payload:
+```
+lastActiveWindow: { workspaceIdentifier: { configURIPath: '.../agent-sessions.code-workspace' }, ... },
+openedWindows: []
+```
+Relaunching against the same `--user-data-dir` with no CLI arguments
+opened exactly **one** window: "Agents", loading `sessions.html`. The
+editor and its `testproject` folder never came back.
+
+**After (0008 applied, `out12`, same `0001`-`0007` chain plus 0008,
+same scratch `--user-data-dir`, same exact click sequence)**: the same
+trace point now logs:
+```
+lastActiveWindow: { workspaceIdentifier: { configURIPath: '.../agent-sessions.code-workspace' }, ... },
+openedWindows: [
+  { folder: 'file:///.../testproject', backupPath: '.../Backups/578c4b94c3048cedd35c7704837ca554', ... },
+  { workspaceIdentifier: { configURIPath: '.../agent-sessions.code-workspace' }, ... }
+]
+```
+— the editor's `testproject` folder is present in `openedWindows` where
+it was previously dropped entirely, and `storage.json` on disk matched
+this exactly. Relaunching against the same `--user-data-dir` with no CLI
+arguments opened **two** windows this time: "Welcome - testproject -
+HUPI Code" (`workbench.html`, the real editor, with the correct folder)
+and "Agents" (`sessions.html`). The gap the certification report
+describes is closed — the editor comes back, every time, regardless of
+which window the user happened to close first.
+
+## 0009 — the GitHub Copilot entitlement probe nobody asked for (2026-10-07)
+
+`patches/0009-disable-default-account-provider-copilot-entitlement-probe.patch`
+— not found by using a feature and hitting a dead end like 0002-0006,
+and not a certification report like 0008; found by auditing the parts
+of `product.defaultChatAgent` those patches never touched. 0001-0008
+each found and removed a Copilot-shaped *UI* dead end (onboarding, chat
+setup, the native chat view, the account menu). None of them touched
+the thing that actually resolves whether an account is Copilot-
+entitled in the first place — because that machinery has no UI of its
+own to notice broken. It just runs, in the background, forever,
+against a real Microsoft/GitHub endpoint, using whatever GitHub
+credential the user happens to have lying around for something
+completely unrelated.
+
+**The mechanism.** `product-overlay.json` has never touched
+`defaultChatAgent` itself — only the four `hupiDisableX` booleans layered
+around it. That block still carries upstream's real values straight
+through to the shipped `product.json`, including
+`entitlementUrl: "https://api.github.com/copilot_internal/user"`,
+`tokenEntitlementUrl: ".../v2/token"`, `managedSettingsUrl:
+".../managed_settings"`, and `providerExtensionId:
+"vscode.github-authentication"` — the *generic* built-in GitHub OAuth
+provider every VS Code fork ships for Settings Sync, Source Control,
+and Pull Requests/Issues, with no Copilot involvement at all.
+`src/vs/workbench/services/accounts/browser/defaultAccount.ts`'s
+`DefaultAccountProviderContribution` is registered unconditionally via
+`registerWorkbenchContribution2(..., WorkbenchPhase.BlockStartup)` — no
+`hupiDisableX` check gates it, because it predates all of this chain's
+Copilot-UI-specific flags and isn't itself UI. Its constructor
+immediately builds a `DefaultAccountProvider` and calls
+`defaultAccountService.setDefaultAccountProvider(...)`, which resolves
+the account right away and then reschedules itself every
+`ACCOUNT_DATA_POLL_INTERVAL_MS` (one hour) for as long as the window
+stays open. Each resolution calls `findMatchingProviderSession('github',
+providerScopes)`, and `providerScopes` is `[["read:user","user:email",
+"repo","workflow"],["user:email"],["read:user"]]` — matched with
+`expectedScopes.every(scope => scopes.includes(scope))`, so *any*
+existing `github` session with as little as the `read:user` or
+`user:email` scope qualifies, not one obtained for Copilot specifically.
+If a match exists, `GET https://api.github.com/copilot_internal/user`
+(and, depending on the response, `.../v2/token`) fires for real, with
+that session's access token attached as `Authorization: Bearer
+<token>`. None of patches 0001-0008 touch this file or this
+contribution at all.
+
+**Why this matters more than 0001-0006 combined.** Those patches each
+stopped a Copilot-shaped dead end from being *shown* to a user who went
+looking for Copilot. This one runs regardless of whether anyone ever
+opens Chat — the only precondition is having signed into GitHub for any
+reason at all (Settings Sync is the obvious one; HUPI Code ships the
+generic auth provider, not a Copilot-gated one). A real user's GitHub
+OAuth token then gets silently sent to a Microsoft-owned API, hourly,
+for the entire time the window is open, to ask a question — "is this
+account Copilot-entitled?" — that a Copilot-less IDE has no legitimate
+reason to be asking in the first place. This is also, transitively, the
+same data source `ChatEntitlementService`'s own Pro/Business/Enterprise
+entitlement state and Voice Mode's `isVoiceEntitled()` gate
+(`src/vs/workbench/contrib/chat/browser/voiceClient/voiceSessionController.ts`)
+both read from (`ChatEntitlementRequests.resolveEntitlement()` calls
+`defaultAccountService.refresh({ refreshEntitlements: true })`
+directly) — see the Voice Mode re-check below.
+
+**The fix.** Same `hupiDisableX` convention as 0003-0006: a new
+`hupiDisableDefaultAccountProvider` field on `IProductConfiguration`
+(`src/vs/base/common/product.ts`), set `true` in `product-overlay.json`,
+checked at the top of `DefaultAccountProviderContribution`'s
+constructor (`defaultAccount.ts`) with an early `return` before
+`DefaultAccountProvider` is ever instantiated or registered. Leaving
+`IDefaultAccountService`'s provider unset this way is safe, not just
+convenient — every consumer already treats "no provider set" as the
+ordinary signed-out state via optional chaining
+(`this.defaultAccountProvider?.refresh(options)`,
+`getDefaultAccountAuthenticationProvider()` falling back to its
+hardcoded default) — confirmed by reading those call sites, not
+assumed. Folded into the same patch: clearing
+`builtInExtensionsEnabledWithAutoUpdates` (upstream hardcodes
+`["GitHub.copilot-chat"]` here, inert today since that extension isn't
+bundled, but a literal Copilot extension ID sitting in the shipped
+`product.json` is worth a reviewer never seeing) — `product-overlay.json`
+now sets it to `[]`.
+
+**Rejected approach:** blanking out individual URL fields inside
+`defaultChatAgent` (`entitlementUrl`, `tokenEntitlementUrl`, etc.)
+directly in `product-overlay.json` instead of adding a new flag. Looked
+simpler at first, but `build/build.sh`'s overlay step is a flat
+`dict.update()` (Python), not a deep merge — supplying a partial
+`defaultChatAgent` object would silently wipe every other field in it
+(`extensionId`, `chatExtensionId`, the command-id strings 0002/0003
+reference) rather than merge over just the URLs. The new boolean flag
+avoids touching that block's shape at all.
+
+**Live-verified before fixing, not just reasoned from source** (same
+discipline as 0008): reproducing the real HTTP call without a real
+GitHub/Copilot account used a temporary, not-committed debug patch
+(`patches/9999-HUPI-DEBUG-temp-not-for-commit.patch`, deleted before
+this entry was written) that replaced `DefaultAccountProvider.getSessions()`
+with a hardcoded fake session (`scopes: ["read:user"]`, a garbage
+access token) and shortened `ACCOUNT_DATA_POLL_INTERVAL_MS` from one
+hour to 8 seconds — exercising every real line of unmodified downstream
+logic (scope matching, URL construction, the actual `IRequestService`
+call) without ever touching a real account. Confirmed first that
+outbound HTTPS to the real target is reachable from the build/test
+environment (`curl -sI https://api.github.com` → real `HTTP/2 200`), so
+a captured 401 below is a genuine round trip to GitHub's production
+API, not a local artifact.
+
+**Before (pre-0009, `out-debug-before`, `0001`-`0008` chain plus the
+temp debug patch).** Launched under `xvfb-run` with `--log trace`,
+`renderer.log` shows, unprompted, at startup:
+```
+[debug] [DefaultAccount] Getting Default Account from authenticated sessions for provider: github
+[warning] [HUPI-DEBUG] getSessions() called for provider github - returning a FAKE session to verify the entitlement request actually fires
+[debug] [DefaultAccount] Checking session with scopes ["read:user"]
+[debug] [DefaultAccount] Fetching entitlements from: https://api.github.com/copilot_internal/user
+[debug] [DefaultAccount] Received 401 for URL https://api.github.com/copilot_internal/user with session hupi-debug-fake-session, likely due to expired/revoked token or insufficient permissions. Trying next session if available.
+```
+— a real 401 from GitHub's real server, ~250ms round trip, using only
+a locally-fabricated fake session. The debug-shortened poll then
+re-armed itself and repeated the identical fetch-and-401 sequence
+every ~8 seconds, unprompted, for as long as the window stayed open
+(six consecutive cycles observed in a 41-second window:
+`22:58:33`, `:42`, `:50`, `:58`, `22:59:06`, `:14`), confirming the
+production one-hour `RunOnceScheduler` is a real, self-sustaining
+repeat, not a one-shot. Independently corroborated by an untouched
+`renderer.log` from the prior 0008 testing session
+(`scratch-repro/user-data/logs/20261006T214316/window1/renderer.log`,
+`0001`-`0008` only, no debug patch, no real GitHub session present),
+which already shows this same contribution running unconditionally at
+startup and actively checking for a session (`"No matching session
+found for provider: github"`) even with nothing to find — proof the
+mechanism is live in the real shipped build, not just in this debug
+variant.
+
+**After (0009 applied, `out-debug-after`, same `0001`-`0008` chain plus
+0009 plus the same temp debug patch, same `run_debug_probe.sh`
+sequence).** `renderer.log` (436 lines total) contains:
+```
+$ grep -c '[DefaultAccount]' renderer.log
+0
+$ grep -c 'HUPI-DEBUG' renderer.log
+0
+```
+Zero. Not "no HTTP calls" — *no `DefaultAccountProvider` activity of
+any kind*, including the debug instrumentation's own fake-session
+log line, because `DefaultAccountProviderContribution` returns before
+`DefaultAccountProvider` is ever constructed, so the patched
+`getSessions()` override is dead code that's never reached. (The
+log does still contain unrelated, pre-existing `https://api.github.com`
+mentions from a completely different subsystem — `[AgentHost] No
+signed-in session resolved for resource: https://api.github.com` —
+present in equal numbers in the *before* log too; confirmed this is
+baseline noise from AgentHost's own separate GitHub integration, not
+a regression or something this patch should have touched.)
+
+**Voice Mode re-check (finding from the same investigation, no
+separate patch needed).** `isVoiceEntitled()`
+(`voiceSessionController.ts`) requires `ChatEntitlement.Pro` (or
+Business/Enterprise), which `ChatEntitlementService` only ever sets
+from `ChatEntitlementRequests.resolveEntitlement()` calling
+`defaultAccountService.refresh({ refreshEntitlements: true })` —
+confirmed by reading that call site directly. With
+`hupiDisableDefaultAccountProvider` set, `defaultAccountProvider` is
+permanently `null`, so `refresh()`'s `this.defaultAccountProvider?.refresh(options)`
+is permanently a no-op returning `null` — there is no longer any live
+data source that could ever flip entitlement to Pro, for any account,
+real or fake. Not independently live-verified with a real paid Copilot
+account (out of scope here — fabricating one wasn't attempted, per the
+investigation's own ground rules), but the entitlement context key
+itself (`[chat entitlement context] updateContext(): {"entitlement":1}`,
+the synchronous startup default) was confirmed identical in both the
+before and after debug traces, and the only asynchronous path that
+could ever change it is now provably severed by the same zero-activity
+result above. No follow-up patch needed — Voice Mode's entitlement gate
+is a downstream consequence of this same fix, not a separate bug.
+
+**Verified against a real rebuilt, rerun instance, not just "it
+compiles"**: the full `0001`-`0009` chain applies cleanly in sequence
+against a fresh `1.137.0` checkout (confirmed in the build log's own
+"applying patches" listing for both the debug and the final clean
+build); `build/smoke-test.sh` passes against the final `0001`-`0009`
+build with no debug patches applied, confirming the app still starts,
+the HUPI extension still loads, and none of 0004/0005/0006's own
+smoke-test assertions regressed.
+
+## Permanent automated checks for 0008 and 0009 (2026-10-06)
+
+Both 0008 and 0009 were found and verified by hand (CDP-driven real UI
+actions, `--log trace`, a temporary debug patch) rather than by any
+existing CI check — nothing before this would have caught either
+regression coming back. This adds one permanent check per patch, each
+shaped to match how that patch actually needs to be observed rather than
+forcing both into the same mechanism.
+
+**0009 (`hupiDisableDefaultAccountProvider`) — extended the existing
+`build/smoke-test.sh` probe, no new patch needed.** The fix makes
+`DefaultAccountProviderContribution` return before ever constructing a
+`DefaultAccountProvider` or calling `defaultAccountService.setDefaultAccountProvider()`.
+Rather than inventing a new internal probe command the way 0007 did for
+0005, this reuses an *existing* upstream context key that already
+happens to be gated on the exact same code path:
+`CONTEXT_DEFAULT_ACCOUNT_STATE` (`'defaultAccountStatus'`, declared in
+`src/vs/workbench/services/accounts/browser/defaultAccount.ts`) is only
+ever `.bindTo(contextKeyService)`'d inside `DefaultAccountProvider`'s own
+constructor — and that class is only ever instantiated from inside
+`DefaultAccountProviderContribution`'s constructor, which is exactly the
+call 0009's early `return` skips. Per 0005's own already-documented
+finding (a `RawContextKey`'s static default is never consulted by the
+real `getContextKeyValue` chain — only an explicit `bindTo` + `set` makes
+a key's value exist at all), a key that is never bound reads back as
+`undefined`, not as its declared `'uninitialized'` default. So: 0009
+working means `_hupi.getContextKeyValue('defaultAccountStatus')` (0007's
+probe command, already wired into `smoke-test.sh`'s probe extension)
+returns `undefined`; 0009 regressing means it returns some real string,
+because the contribution — and the provider it builds — actually ran.
+No real GitHub account and no real network call are needed either way:
+`build/smoke-test.sh`'s probe extension now also captures this value and
+the script fails if it is anything other than `undefined`.
+
+Confirmed empirically, both directions, against real builds already on
+disk from this same investigation rather than reasoning from source
+alone:
+- Against `out-debug-before` (`0001`-`0008` plus 0009's own temporary
+  fake-session debug patch, 0009 itself **not** applied): the probe read
+  back `defaultAccountStatus:available` — the fake session resolves far
+  enough to flip to `Available`, confirming the contribution ran.
+- Against `out12` (`0001`-`0008`, no 0009, no debug patch — the closest
+  thing to what a real CI run without any GitHub session looks like):
+  the probe read back `defaultAccountStatus:uninitialized` — a different
+  real string than the debug build's, but still not `undefined`, same
+  conclusion.
+- Against `out-final` (`0001`-`0009`, no debug patch — the real shipped
+  state): the probe read back `defaultAccountStatus:undefined` every
+  time.
+
+Running the actual updated `build/smoke-test.sh` (not just a standalone
+probe) against both confirms the same thing end-to-end: it exits 0
+against `out-final` with the new line in its OK summary, and exits 1
+against `out-debug-before` with only the new assertion failing — every
+other assertion (`chatSetupCommand:absent`, `agenticSignInCommand:absent`,
+`nativeChatViewHidden:true`) still passes on that same build, confirming
+the new check fails for the right, specific reason and not as a side
+effect of something else being broken.
+
+**0008 (restore all individually closed windows) — a new, dedicated
+script, `build/smoke-test-window-state.sh`, not an extension of
+`smoke-test.sh`.** This regression only manifests across a real
+close → close → relaunch sequence against a persisted `--user-data-dir`,
+driving two separate windows through two separate, real close actions —
+not something a single-launch, single-process probe extension can
+express. The new script automates the exact manual technique this file's
+own 0008 section above already proved out: launch the editor window on a
+scratch folder; open a second, real Agents window in the *same* running
+instance via the `--agents` CLI flag (confirmed live that this routes
+through Code's own single-instance IPC to the already-running process,
+the same as a user running `code --agents` in a terminal); close the
+editor first via a real `Ctrl+Shift+W` dispatched with CDP
+`Input.dispatchKeyEvent` (not `Target.closeTarget`/`Page.close`, both of
+which bypass the real close sequence entirely — already discovered and
+documented above, not rediscovered here); close the Agents window second
+via a real click on its DOM close icon through CDP `Runtime.evaluate`
+(`window.controlsStyle: "custom"`, seeded into the scratch profile's
+`settings.json` before the first launch, makes that icon exist in the DOM
+at all — also already discovered above); wait for the process to fully
+exit; relaunch against the identical `--user-data-dir` with no CLI
+arguments; assert both a `workbench.html` and a `sessions.html` page
+target exist in the relaunched process's own CDP `/json/list`.
+
+`/json/list` was chosen as the pass/fail signal over `wmctrl`/`xdotool`
+window titles because this environment's Xvfb runs with no window
+manager at all (the same reason `xdotool windowclose` didn't work for
+the close actions either, per the 0008 investigation above) — a
+window-manager-hint-dependent tool is the wrong thing to trust under a
+WM-less Xvfb. It was chosen over asserting `openedWindows` in the
+persisted state file *before* relaunching because that would only prove
+the write side of the fix, not that the app genuinely reopens both real
+windows on an actual relaunch — the real, user-facing thing both the
+certification report and 0008 itself are about.
+
+A small, dependency-free CDP client (`build/cdp_helper.py`) backs both
+the keypress and the close-icon click: hand-rolled HTTP (for
+`/json/list`) and raw-socket RFC 6455 framing (for the WebSocket RPC
+calls) using only the Python standard library, rather than depending on
+`websocket-client` (pip) or a Node-based CDP client — neither is
+guaranteed installed, network-reachable, or on `PATH` at this point in a
+fresh GitHub Actions job, while `python3` already is (`build.sh` itself
+already hard-depends on it).
+
+Linux-only, wired into `.github/workflows/build.yml`'s `linux-x64` job
+only, invoked as `xvfb-run -a ./build/smoke-test-window-state.sh ...`
+(wrapping the *whole script*, not each individual launch the way
+`build/smoke-test.sh`'s own Linux case does — the same reasoning
+`build/capture-screenshot.sh`'s own comment already documents for why,
+since this script launches the app three separate times and all three
+need to land on the same virtual `DISPLAY`). Not extended to
+Windows/macOS: those runners provide a real desktop session rather than
+Xvfb, and this script's whole technique (the close-icon click, the
+`--agents` single-instance relaunch routing, the WM-less-Xvfb framing of
+why `/json/list` is trusted over window-manager hints) has only been
+verified against this runner's specific xvfb+xdotool setup — extending
+it without verifying it there first would be exactly the kind of
+unverified, plausible-sounding addition this file's own `smoke-test.sh`
+war story (above) already warns against.
+
+**Verified against real builds already on disk, both directions, with
+the actual final script** (not a hand-rolled approximation of it):
+- Against `out11` (`0001`-`0007`, pre-0008): the script closed the
+  editor then the Agents window exactly as described, the app exited,
+  and on relaunch only the Agents window's `sessions.html` target ever
+  appeared (45s timeout on `workbench.html`) — the script printed the
+  exact documented symptom and exited 1.
+- Against `out12` (`0001`-`0008`): the identical sequence relaunched
+  with both `workbench.html` and `sessions.html` targets present, and
+  the script printed its OK summary and exited 0 — run twice in a row
+  with the same result, to rule out a one-off timing fluke.

@@ -66,6 +66,28 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-linux-x64"
 
+      # Separate from the smoke test above because it's a genuinely different
+      # shape of check (see the script's own top-of-file comment): it drives
+      # two real windows through two real close actions, kills the whole app,
+      # relaunches it, and asserts both windows come back — a regression test
+      # for patches/0008, not something the single-launch probe-extension
+      # model above can express. Linux-only for now: its CDP-driven
+      # close-button-click/keypress technique and the `--agents` CLI
+      # relaunch-routing behavior it depends on have only been verified
+      # against this runner's xvfb+xdotool setup (already installed above for
+      # capture-screenshot.sh, reused here), not against the real desktop
+      # sessions the Windows/macOS runners provide — see the script's own
+      # comment for why extending it there isn't a given. Wrapped in
+      # `xvfb-run` around the *whole script* (not inside it, and not the
+      # per-launch wrapping build/smoke-test.sh's own Linux case uses)
+      # because it launches the app three separate times and all three need
+      # to land on the same virtual DISPLAY — the exact same reasoning
+      # build/capture-screenshot.sh's own comment already documents for why
+      # it's invoked the same way.
+      - name: Smoke test (window-state regression, patches/0008)
+        working-directory: hupi-code
+        run: xvfb-run -a ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-linux-x64"
+
       # Non-blocking: this is evidence for Store-listing/marketing use
       # (see capture-screenshot.sh's own comment for exactly why it
       # exists), not a correctness check — smoke-test.sh above is what
