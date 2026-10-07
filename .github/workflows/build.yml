@@ -71,15 +71,15 @@ jobs:
       # two real windows through two real close actions, kills the whole app,
       # relaunches it, and asserts both windows come back — a regression test
       # for patches/0008, not something the single-launch probe-extension
-      # model above can express. Linux-only for now: its CDP-driven
-      # close-button-click/keypress technique and the `--agents` CLI
-      # relaunch-routing behavior it depends on have only been verified
-      # against this runner's xvfb+xdotool setup (already installed above for
-      # capture-screenshot.sh, reused here), not against the real desktop
-      # sessions the Windows/macOS runners provide — see the script's own
-      # comment for why extending it there isn't a given. Wrapped in
-      # `xvfb-run` around the *whole script* (not inside it, and not the
-      # per-launch wrapping build/smoke-test.sh's own Linux case uses)
+      # model above can express. Also now wired into the windows-x64 job
+      # below (see that job's own comment on its equivalent step, and
+      # docs/UPSTREAM_UPGRADES.md's "Extending the 0008 regression check to
+      # Windows CI" section) — not macOS, still unverified there. On this
+      # Linux runner specifically, its CDP-driven close-button-click/keypress
+      # technique has been verified against this runner's xvfb+xdotool setup
+      # (already installed above for capture-screenshot.sh, reused here).
+      # Wrapped in `xvfb-run` around the *whole script* (not inside it, and
+      # not the per-launch wrapping build/smoke-test.sh's own Linux case uses)
       # because it launches the app three separate times and all three need
       # to land on the same virtual DISPLAY — the exact same reasoning
       # build/capture-screenshot.sh's own comment already documents for why
@@ -255,6 +255,41 @@ jobs:
         shell: bash
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-win32-x64"
+
+      # Same regression check as the linux-x64 job's own
+      # "Smoke test (window-state regression, patches/0008)" step —
+      # see that step's comment and build/smoke-test-window-state.sh's
+      # own top-of-file comment for the full reasoning. Extended here
+      # after confirming, by reading the real upstream source (not by
+      # assuming), that neither close technique it depends on (a real
+      # Ctrl+Shift+W keypress for the editor, a real DOM click on the
+      # Agents window's close icon) is actually Linux-specific — see
+      # docs/UPSTREAM_UPGRADES.md's "Extending the 0008 regression check
+      # to Windows CI" section for the detailed trace through
+      # CloseWindowAction's keybindings and titlebarPart.ts's window-
+      # controls gating. No xvfb-run wrapper here (none needed or
+      # available on Windows — windows-latest already provides a real
+      # desktop session the same way it already does for the Smoke test
+      # and screenshot steps around this one).
+      #
+      # continue-on-error: true *for now*, unlike the Linux job's
+      # equivalent step: this was reasoned from source, not verified
+      # against a real windows-latest run (no interactive access to one
+      # during this investigation) — three separate app launches plus
+      # the --agents single-instance relaunch is meaningfully more
+      # process-management surface than the single-launch Smoke test
+      # above already proves works on this runner. Flip this to blocking
+      # once a real run (or a few) has actually exercised and passed it;
+      # until then a failure here is a lead worth reading the logs for,
+      # not something that should redden every Windows PR over an
+      # unverified assumption (see UPSTREAM_UPGRADES.md's "there was no
+      # Windows hang" war story for exactly this kind of false negative
+      # risk on this same runner).
+      - name: Smoke test (window-state regression, patches/0008)
+        shell: bash
+        working-directory: hupi-code
+        continue-on-error: true
+        run: ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
       # Non-blocking, same as the Linux job's own screenshot step —
       # evidence for Store-listing/marketing use, not a correctness

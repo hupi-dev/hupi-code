@@ -70,49 +70,132 @@
 # the actual, user-facing thing patches/0008 fixes and the actual thing
 # the certification report complained about.
 #
-# Linux-only, matching the task's own stated default: this script's whole
-# technique depends on Xvfb + a WM-less X server behaving exactly as
-# characterized above, which was only ever verified with xvfb/xdotool
-# installed on the Linux CI runner (.github/workflows/build.yml). The
-# Windows/macOS CI runners already run a real logged-in desktop session
-# for build/smoke-test.sh's own single-launch probe, but driving a
-# genuine close-button click and a second, IPC-routed CLI invocation
-# through a real desktop session's own window manager has not been tried
-# or verified on either platform — rather than guess that it transfers
-# cleanly, this is wired into CI for linux-x64 only (see that workflow
-# file's own comment next to this script's invocation).
+# Linux and Windows, not macOS: extended to windows-x64 CI
+# (2026-10-07 investigation, see docs/UPSTREAM_UPGRADES.md's "Extending
+# the 0008 regression check to Windows CI" section for the full
+# reasoning) after confirming, by reading the real upstream source in
+# both cases rather than assuming either way, that neither close
+# technique this script depends on is actually Linux-specific:
+#
+#   - The editor's `Ctrl+Shift+W` close: `CloseWindowAction`
+#     (src/vs/workbench/electron-browser/actions/windowActions.ts)
+#     registers it as a *secondary* keybinding on both `linux` and `win`
+#     (primary is Alt+F4 on both; macOS's only binding is Cmd+Shift+W) —
+#     dispatching Ctrl+Shift+W via CDP exercises a real, registered
+#     keybinding on Windows exactly as it does on Linux. CDP
+#     `Input.dispatchKeyEvent` also synthesizes the keydown/keyup
+#     directly in the renderer's own input pipeline, bypassing the
+#     host OS's real input/focus queue entirely — whether the window
+#     has real OS focus (never guaranteed under a WM-less Xvfb, and not
+#     assumed on Windows either) doesn't matter.
+#   - The Agents window's close-icon click: genuinely has no
+#     `workbench.action.closeWindow` equivalent on *either* OS —
+#     `src/vs/sessions/sessions.common.main.ts` only imports the
+#     platform-agnostic `workbench/browser/actions/windowActions.js`,
+#     never the electron-specific one `CloseWindowAction` lives in, on
+#     any platform. So this can't be simplified to "keyboard shortcut
+#     everywhere" on either OS — the DOM close-icon click is required
+#     for the Agents window regardless. Whether that icon exists in the
+#     DOM at all (`.window-icon.window-close`,
+#     src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts)
+#     is gated on `!hasNativeTitlebar() && !useWindowControlsOverlay()`
+#     — explicitly commented upstream as "Custom Window Controls (Native
+#     Windows/Linux)" and excluded only for `isMacintosh`. The same
+#     `window.controlsStyle: "custom"` settings.json seed this script
+#     already uses to force that element to exist applies identically on
+#     Windows; nothing here is Linux-only in the source.
+#
+# What *is* genuinely different, and was changed below to account for
+# it: there is no Xvfb-equivalent concept on Windows to wrap this in —
+# GitHub's windows-latest runner already provides a real, if
+# non-interactive, desktop session that Electron renders real top-level
+# windows into (the same session build/smoke-test.sh's own single-launch
+# probe and build/capture-screenshot.sh's real GDI screenshot capture
+# already depend on and already pass against today) — so the `$DISPLAY`
+# requirement below only applies on Linux, and CI does not wrap this
+# script in anything on Windows. The packaged binary's path also differs
+# per OS (see build/smoke-test.sh's own comment for why), so APP_BIN
+# below follows that script's same per-OS resolution.
+#
+# **Not verified against a real windows-latest run at the time this was
+# written** — reasoned from reading the actual upstream source for both
+# close techniques (above) and from this repo's own already-green
+# Windows CI evidence (build/smoke-test.sh and build/capture-screenshot.sh
+# already launch, interact with, and screenshot a real window on
+# windows-latest today), not from running this exact script there. Three
+# separate app launches plus the `--agents` single-instance relaunch is
+# more process-management surface than smoke-test.sh's own one-launch
+# case already proven on that runner, so treat a first real CI failure
+# here as plausibly a genuine new Windows-only wrinkle (this repo's own
+# "there was no Windows hang" war story in UPSTREAM_UPGRADES.md is a
+# reminder that Windows + Git Bash path/process semantics have already
+# produced at least one subtle, non-obvious false negative before) rather
+# than assume the regression itself came back. macOS is still not
+# covered: its real native titlebar/window-controls model is different
+# enough (see `getWindowControlsStyle`'s own `isMacintosh` carve-out
+# above) that this investigation did not attempt to extend the reasoning
+# that far.
 #
 # Usage: ./build/smoke-test-window-state.sh /path/to/VSCode-<platform>-<arch>
-# Must already be running under a display server that stays alive across
-# multiple separate launches of the app binary (e.g. invoked as
-# `xvfb-run -a ./build/smoke-test-window-state.sh ...`, the same
+# On Linux, must already be running under a display server that stays
+# alive across multiple separate launches of the app binary (e.g. invoked
+# as `xvfb-run -a ./build/smoke-test-window-state.sh ...`, the same
 # whole-script-wrapping convention build/capture-screenshot.sh already
 # uses and documents — see that script's own comment for why wrapping the
 # whole script, rather than each individual launch the way
 # build/smoke-test.sh's own single-launch case does, is required whenever
 # more than one separate process invocation needs to land on the same
-# virtual DISPLAY).
+# virtual DISPLAY). On Windows, just run it directly — no wrapper needed
+# or available.
 set -euo pipefail
 
 APP_DIR="${1:?usage: smoke-test-window-state.sh <path to VSCode-<platform>-<arch>>}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CDP_HELPER="$SCRIPT_DIR/cdp_helper.py"
 
-if [[ "$(uname -s)" != "Linux"* ]]; then
-  echo "SKIP: smoke-test-window-state.sh only runs on Linux (see this script's own" >&2
-  echo "top-of-file comment for why) — nothing to do on $(uname -s)." >&2
-  exit 0
-fi
-
-if [[ -z "${DISPLAY:-}" ]]; then
-  echo "FAIL: \$DISPLAY is not set. This script must be run already wrapped in" >&2
-  echo "xvfb-run (e.g. 'xvfb-run -a ./build/smoke-test-window-state.sh ...'), not" >&2
-  echo "wrapping an internal xvfb-run itself around each launch — it needs the" >&2
-  echo "same virtual display to persist across three separate app launches." >&2
+# Same python3-or-python fallback build/capture-screenshot.sh already
+# needed — native Windows Python installs typically provide only
+# python.exe, not a python3.exe alias (see
+# docs/UPSTREAM_UPGRADES.md's "python3 hardcoded" note).
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+  PYTHON=python
+else
+  echo "FAIL: python3 (or python) not found on PATH — required to drive cdp_helper.py" >&2
   exit 1
 fi
 
-APP_BIN="$APP_DIR/hupi-code"
+# Same per-OS binary path resolution build/smoke-test.sh already
+# established — see that script's own comment for exactly why each of
+# these is what it is. macOS deliberately not handled here yet (see the
+# top-of-file comment's "not verified" section); this script exits
+# SKIP rather than guessing at an untested macOS technique.
+case "$(uname -s)" in
+  Linux*)
+    APP_BIN="$APP_DIR/hupi-code"
+    if [[ -z "${DISPLAY:-}" ]]; then
+      echo "FAIL: \$DISPLAY is not set. This script must be run already wrapped in" >&2
+      echo "xvfb-run (e.g. 'xvfb-run -a ./build/smoke-test-window-state.sh ...'), not" >&2
+      echo "wrapping an internal xvfb-run itself around each launch — it needs the" >&2
+      echo "same virtual display to persist across three separate app launches." >&2
+      exit 1
+    fi
+    ;;
+  MINGW*|MSYS*|CYGWIN*)
+    APP_BIN="$APP_DIR/HUPI Code.exe"
+    # No $DISPLAY/Xvfb equivalent needed or available on Windows — see
+    # the top-of-file comment for why windows-latest's own desktop
+    # session is already sufficient, unlike Linux.
+    ;;
+  *)
+    echo "SKIP: smoke-test-window-state.sh has only been extended to Linux and" >&2
+    echo "Windows so far (see this script's own top-of-file comment for why) —" >&2
+    echo "nothing to do on $(uname -s)." >&2
+    exit 0
+    ;;
+esac
+
 WORKDIR="$(mktemp -d)"
 USER_DATA_DIR="$WORKDIR/user-data"
 TESTPROJECT_DIR="$WORKDIR/testproject"
@@ -123,7 +206,10 @@ cleanup() {
   # code, not whether teardown here is perfectly tidy.
   [[ -n "${APP_PID:-}" ]] && kill -9 "$APP_PID" 2>/dev/null || true
   [[ -n "${RELAUNCH_PID:-}" ]] && kill -9 "$RELAUNCH_PID" 2>/dev/null || true
-  pkill -9 -f "$USER_DATA_DIR" 2>/dev/null || true
+  # pkill isn't guaranteed present on Windows Git Bash (no procps by
+  # default) — best-effort only anyway (see comment above), so just skip
+  # it there rather than fail cleanup over a missing tool.
+  command -v pkill >/dev/null 2>&1 && pkill -9 -f "$USER_DATA_DIR" 2>/dev/null || true
   rm -rf "$WORKDIR" 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -169,7 +255,7 @@ APP_PID=$!
 
 PORT="$(wait_for_devtools_port "$WORKDIR/instance1.log")"
 
-EDITOR_WS="$(python3 "$CDP_HELPER" wait "$PORT" workbench.html 60)" || {
+EDITOR_WS="$("$PYTHON" "$CDP_HELPER" wait "$PORT" workbench.html 60)" || {
   echo "FAIL: editor window (workbench.html) never appeared. Log:" >&2
   tail -c 4000 "$WORKDIR/instance1.log" >&2
   exit 1
@@ -184,22 +270,22 @@ echo "==> opening the Agents window via --agents against the same --user-data-di
 "$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$USER_DATA_DIR" --agents \
   >> "$WORKDIR/instance1.log" 2>&1
 
-AGENTS_WS="$(python3 "$CDP_HELPER" wait "$PORT" sessions.html 60)" || {
+AGENTS_WS="$("$PYTHON" "$CDP_HELPER" wait "$PORT" sessions.html 60)" || {
   echo "FAIL: Agents window (sessions.html) never appeared after --agents. Log:" >&2
   tail -c 4000 "$WORKDIR/instance1.log" >&2
   exit 1
 }
 
 echo "==> closing the editor window first (real Ctrl+Shift+W via CDP)"
-python3 "$CDP_HELPER" keypress-close-window "$EDITOR_WS"
-python3 "$CDP_HELPER" wait-absent "$PORT" workbench.html 30 || {
+"$PYTHON" "$CDP_HELPER" keypress-close-window "$EDITOR_WS"
+"$PYTHON" "$CDP_HELPER" wait-absent "$PORT" workbench.html 30 || {
   echo "FAIL: editor window did not close after dispatching Ctrl+Shift+W." >&2
-  python3 "$CDP_HELPER" titles "$PORT" >&2
+  "$PYTHON" "$CDP_HELPER" titles "$PORT" >&2
   exit 1
 }
 
 echo "==> closing the Agents window second (real DOM close-icon click via CDP)"
-CLICKED="$(python3 "$CDP_HELPER" click-close-button "$AGENTS_WS")"
+CLICKED="$("$PYTHON" "$CDP_HELPER" click-close-button "$AGENTS_WS")"
 if [[ "$CLICKED" != "true" ]]; then
   echo "FAIL: the .window-icon.window-close element was not found on the Agents" >&2
   echo "window — window.controlsStyle: custom may not have taken effect, or" >&2
@@ -235,10 +321,10 @@ RELAUNCH_PORT="$(wait_for_devtools_port "$WORKDIR/relaunch.log")"
 # enough and keeps this fast on the common pass case.
 EDITOR_BACK=0
 AGENTS_BACK=0
-if python3 "$CDP_HELPER" wait "$RELAUNCH_PORT" workbench.html 45 > /dev/null; then
+if "$PYTHON" "$CDP_HELPER" wait "$RELAUNCH_PORT" workbench.html 45 > /dev/null; then
   EDITOR_BACK=1
 fi
-if python3 "$CDP_HELPER" wait "$RELAUNCH_PORT" sessions.html 10 > /dev/null; then
+if "$PYTHON" "$CDP_HELPER" wait "$RELAUNCH_PORT" sessions.html 10 > /dev/null; then
   AGENTS_BACK=1
 fi
 
@@ -261,5 +347,5 @@ echo "the Agents window, then relaunching, used to lose the editor's window" >&2
 echo "state entirely and reopen only the Agents window. See" >&2
 echo "docs/UPSTREAM_UPGRADES.md's 0008 section for the full investigation." >&2
 echo "Final devtools targets:" >&2
-python3 "$CDP_HELPER" titles "$RELAUNCH_PORT" >&2 || true
+"$PYTHON" "$CDP_HELPER" titles "$RELAUNCH_PORT" >&2 || true
 exit 1

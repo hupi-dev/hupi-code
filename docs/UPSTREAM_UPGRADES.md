@@ -1027,3 +1027,104 @@ the actual final script** (not a hand-rolled approximation of it):
   with both `workbench.html` and `sessions.html` targets present, and
   the script printed its OK summary and exited 0 — run twice in a row
   with the same result, to rule out a one-off timing fluke.
+
+## Extending the 0008 regression check to Windows CI (2026-10-07)
+
+The original certification bug this check guards (above) was reported
+from real Windows hardware (a Surface Laptop 5 and a Dell Inspiron
+13-5379) — a regression test for it that only ever runs on Linux leaves
+exactly the platform that hit the bug unverified in CI. This was
+investigated before touching anything, matching this file's own
+"verify before fixing" discipline (the `smoke-test.sh` war story above
+is the canonical example of why): the question was whether the Linux
+technique transfers to `windows-latest`, not whether it's convenient to
+assume it does.
+
+**Does Windows CI need an Xvfb-equivalent?** No — confirmed, not
+assumed. `windows-latest` already runs a real (non-interactive, but
+real) logged-in desktop session that Electron renders actual top-level
+windows into, which `build/smoke-test.sh`'s single-launch probe and
+`build/capture-screenshot.sh`'s real GDI screen capture already depend
+on and already pass against on every `windows-x64` CI run today. Xvfb
+exists only because Linux CI runners have no display server at all;
+Windows was never missing the thing Xvfb provides in the first place.
+
+**Does the CDP-driven close technique need to change?** Read the real
+upstream source for both close actions rather than guess:
+- The editor's close (`Ctrl+Shift+W` → `workbench.action.closeWindow`,
+  `CloseWindowAction` in
+  `src/vs/workbench/electron-browser/actions/windowActions.ts`)
+  registers that exact chord as a *secondary* keybinding on both
+  `linux` and `win` (primary on both is Alt+F4; only macOS binds
+  Cmd+Shift+W as primary). CDP's `Input.dispatchKeyEvent` synthesizes
+  the keydown/keyup directly into the renderer's own input pipeline,
+  bypassing the host OS's real focus/input queue entirely on any
+  platform — it doesn't depend on Linux's WM-less Xvfb quirk to work,
+  it was never going through the OS input queue at all.
+- The Agents window's close (a DOM click on
+  `.window-icon.window-close`): checked whether `Ctrl+Shift+W` could
+  replace this everywhere, which would have been the simpler, one-
+  technique design the task asked to consider. It can't, on *any* OS:
+  `src/vs/sessions/sessions.common.main.ts` only imports the
+  platform-agnostic `workbench/browser/actions/windowActions.js`, never
+  the electron-specific file `CloseWindowAction` is defined and
+  registered in (`workbench/electron-browser/desktop.contribution.ts`).
+  The Agents window simply never gets `workbench.action.closeWindow`
+  registered, independent of platform — confirmed by reading both
+  files' own import lists, not inferred from behavior. So the DOM
+  close-icon click stays necessary everywhere this check runs. Whether
+  that icon even exists in the DOM is gated in
+  `src/vs/workbench/electron-browser/parts/titlebar/titlebarPart.ts` by
+  `!hasNativeTitlebar() && !useWindowControlsOverlay()`, under a comment
+  that literally reads "Custom Window Controls (Native Windows/Linux)"
+  — excluded only for `isMacintosh`. `getTitleBarStyle()`
+  (`src/vs/platform/window/common/window.ts`) also defaults to
+  `TitlebarStyle.CUSTOM` "on all OS" unless `window.titleBarStyle` is
+  explicitly set to native (or on a couple of macOS-only edge cases
+  irrelevant here) — so the `window.controlsStyle: "custom"` seed this
+  script already plants in the scratch profile's `settings.json` to
+  force that close icon to render is not a Linux-specific trick; it
+  exercises the identical, shared, non-mac code path on Windows.
+
+**Conclusion: the technique itself is not Linux-specific** — nothing
+about either close action's mechanics required Linux. What *was*
+genuinely different going from the Linux job to the Windows job: no
+`xvfb-run` wrapper (none needed or available), the packaged binary path
+(`HUPI Code.exe`, following `build/smoke-test.sh`'s own already-
+established per-OS resolution), and the `python3`/`python` fallback
+`build/capture-screenshot.sh` already needed for the same reason.
+`build/smoke-test-window-state.sh` was made cross-platform in place
+(Linux + Windows; macOS deliberately left alone — its native
+titlebar/window-controls model is different enough that this
+investigation didn't extend the reasoning that far) rather than forked
+into a separate Windows-only script, since one script covering both
+platforms with a shared `case "$(uname -s)"` block (the same pattern
+`build/smoke-test.sh` already uses) is easier to keep correct than two
+scripts that would drift. `build/cdp_helper.py` needed no changes at
+all — it was already dependency-free stdlib Python with no OS-specific
+code path.
+
+**Honesty about verification, matching this file's own stated
+discipline**: unlike every other entry in this file, this one is
+**reasoned from source, not verified by actually running the updated
+script against a real `windows-latest` run** — this investigation had
+no interactive access to a real Windows machine or a way to iterate
+against one. The reasoning above is as rigorous as source-reading gets
+(both close techniques traced to the exact shared, non-mac code paths
+that make them platform-independent), but this repo's own "there was no
+Windows hang" war story above is a direct, on-the-nose precedent for
+why that's not the same as proof: `build/smoke-test.sh`'s Windows path
+looked correct by inspection too, and still shipped with a real bug (an
+MSYS path baked into a JS string literal) that only a human iterating on
+a real Windows machine caught. The failure mode most likely to repeat
+that pattern here would be in process-management plumbing this check
+leans on more heavily than `smoke-test.sh` ever did — three separate app
+launches plus the `--agents` single-instance relaunch, versus
+`smoke-test.sh`'s one — rather than in the close techniques themselves,
+which is why the CI wiring below starts as `continue-on-error: true`
+rather than immediately gating the build the way the Linux job's
+equivalent step does. The plan is to flip it to blocking once a real
+`windows-x64` run (or a few) actually exercises it and passes; a failing
+non-blocking step is a lead to chase, not noise to ignore, whereas an
+unverified *blocking* step risks turning every future Windows PR red for
+a reason that has nothing to do with the regression it's meant to catch.
