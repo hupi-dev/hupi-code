@@ -1107,24 +1107,27 @@ code path.
 **Honesty about verification, matching this file's own stated
 discipline**: unlike every other entry in this file, this one is
 **reasoned from source, not verified by actually running the updated
-script against a real `windows-latest` run** — this investigation had
-no interactive access to a real Windows machine or a way to iterate
-against one. The reasoning above is as rigorous as source-reading gets
-(both close techniques traced to the exact shared, non-mac code paths
-that make them platform-independent), but this repo's own "there was no
-Windows hang" war story above is a direct, on-the-nose precedent for
-why that's not the same as proof: `build/smoke-test.sh`'s Windows path
-looked correct by inspection too, and still shipped with a real bug (an
-MSYS path baked into a JS string literal) that only a human iterating on
-a real Windows machine caught. The failure mode most likely to repeat
-that pattern here would be in process-management plumbing this check
-leans on more heavily than `smoke-test.sh` ever did — three separate app
-launches plus the `--agents` single-instance relaunch, versus
-`smoke-test.sh`'s one — rather than in the close techniques themselves,
-which is why the CI wiring below starts as `continue-on-error: true`
-rather than immediately gating the build the way the Linux job's
-equivalent step does. The plan is to flip it to blocking once a real
-`windows-x64` run (or a few) actually exercises it and passes; a failing
-non-blocking step is a lead to chase, not noise to ignore, whereas an
-unverified *blocking* step risks turning every future Windows PR red for
-a reason that has nothing to do with the regression it's meant to catch.
+script against a real `windows-latest` run** at the time this was
+written — this investigation had no interactive access to a real
+Windows machine or a way to iterate against one. The reasoning above is
+as rigorous as source-reading gets (both close techniques traced to the
+exact shared, non-mac code paths that make them platform-independent),
+but this repo's own "there was no Windows hang" war story above is a
+direct, on-the-nose precedent for why that's not the same as proof:
+`build/smoke-test.sh`'s Windows path looked correct by inspection too,
+and still shipped with a real bug (an MSYS path baked into a JS string
+literal) that only a human iterating on a real Windows machine caught.
+The failure mode most likely to repeat that pattern here would be in
+process-management plumbing this check leans on more heavily than
+`smoke-test.sh` ever did — three separate app launches plus the
+`--agents` single-instance relaunch, versus `smoke-test.sh`'s one —
+rather than in the close techniques themselves, which is why the CI
+wiring started as `continue-on-error: true` rather than immediately
+gating the build the way the Linux job's equivalent step does.
+
+**Update**: PR #6's CI (run `37582039737`) then actually exercised this
+on a real `windows-latest` runner, and the step reported `success` on
+its own merit, not masked by `continue-on-error`. That's the real run
+this section said to wait for — the step has been flipped to blocking
+in `.github/workflows/build.yml`, matching the Linux job's equivalent
+step.

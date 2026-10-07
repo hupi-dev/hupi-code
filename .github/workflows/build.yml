@@ -272,23 +272,22 @@ jobs:
       # desktop session the same way it already does for the Smoke test
       # and screenshot steps around this one).
       #
-      # continue-on-error: true *for now*, unlike the Linux job's
-      # equivalent step: this was reasoned from source, not verified
-      # against a real windows-latest run (no interactive access to one
-      # during this investigation) — three separate app launches plus
-      # the --agents single-instance relaunch is meaningfully more
-      # process-management surface than the single-launch Smoke test
-      # above already proves works on this runner. Flip this to blocking
-      # once a real run (or a few) has actually exercised and passed it;
-      # until then a failure here is a lead worth reading the logs for,
-      # not something that should redden every Windows PR over an
-      # unverified assumption (see UPSTREAM_UPGRADES.md's "there was no
-      # Windows hang" war story for exactly this kind of false negative
-      # risk on this same runner).
+      # Blocking, same as the Linux job's equivalent step: confirmed
+      # passing on its own merit (not masked by continue-on-error) on a
+      # real windows-latest run — PR #6's CI, run 37582039737, step
+      # "Smoke test (window-state regression, patches/0008)" reported
+      # `success` for this exact job. Ran with continue-on-error: true
+      # until that run existed, since this check launches the app three
+      # separate times plus the --agents single-instance relaunch —
+      # meaningfully more process-management surface than the
+      # single-launch Smoke test above, and this repo has a real prior
+      # incident (UPSTREAM_UPGRADES.md's "there was no Windows hang" war
+      # story) of a check that looked right from source alone but wasn't
+      # until a human verified it on real Windows hardware. That
+      # verification has now happened.
       - name: Smoke test (window-state regression, patches/0008)
         shell: bash
         working-directory: hupi-code
-        continue-on-error: true
         run: ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
       # Non-blocking, same as the Linux job's own screenshot step —
