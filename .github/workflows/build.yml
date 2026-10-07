@@ -306,6 +306,32 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
+      # Working hypothesis for *why* the step below has hung twice with
+      # zero logged output: its very first action, before anything else
+      # (no app launch yet, no printed progress — `pip install --quiet`
+      # suppresses most of its own output), is `pip install --user mss`,
+      # a network-fetching, file-writing install. The "Exclude workspace
+      # from Windows Defender" step earlier in this job only excludes
+      # `github.workspace` — real-time scanning (already confirmed
+      # elsewhere in this same job as "the single biggest known cause of
+      # Windows CI being much slower... it scans every file
+      # synchronously") is still fully active for wherever `pip --user`
+      # actually writes, which is the user profile, not the workspace.
+      # Not proven (GitHub didn't retain logs for either hung run to
+      # confirm exactly where it stalled), but cheap and safe to
+      # mitigate regardless given it's the same documented mechanism
+      # that already bit `npm ci` in this exact job. Computed instead of
+      # hardcoded, since the real site/cache paths depend on whatever
+      # Python version this runner image actually ships.
+      - name: Exclude Python's user install/cache paths from Windows Defender
+        shell: pwsh
+        run: |
+          $userSite = (python -m site --user-site)
+          $userBase = (python -m site --user-base)
+          Add-MpPreference -ExclusionPath $userBase
+          Add-MpPreference -ExclusionPath $userSite
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pip\Cache"
+
       # Non-blocking, same as the Linux job's own screenshot step —
       # evidence for Store-listing/marketing use, not a correctness
       # check (Smoke test above is what actually gates the build).

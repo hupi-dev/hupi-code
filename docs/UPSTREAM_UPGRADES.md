@@ -1621,3 +1621,61 @@ precedents rather than assuming either way:
   evidence, the same way this entire investigation started. Nothing
   observed so far points at that being likely enough to pre-emptively
   weaken the check for.
+
+## A real, recurring windows-x64 infra hang, bounded but not yet root-caused with certainty
+
+While confirming the Linux close-latency fix above with an extra CI
+pass, `windows-x64` failed again — but not on anything this branch's
+work actually tests. The `Smoke test (window-state regression,
+patches/0008)` step passed cleanly; the *next* step, `Capture a
+screenshot of the running app` (a non-blocking, cosmetic step — takes a
+real screenshot of the running app for Store-listing use, see
+`build/capture-screenshot.sh`'s own comment), hung with no error output
+at all until the whole job was force-ended as a `failure` after 66
+minutes (run `37639244025`). This is the **second** time this exact
+step has done this (first at 58 minutes, run `37575028215`, already
+noted earlier in this doc as an apparent one-off flake — it is not
+one).
+
+GitHub did not retain logs for either hung run
+(`BlobNotFound`/404 on both `gh run view --log` and the raw
+`.../actions/jobs/<id>/logs` API endpoint), so the exact point of the
+hang inside the script could not be directly confirmed either time.
+
+**Two things done about it:**
+
+1. **A real, confirmed bug, fixed**: `continue-on-error: true` on this
+   step only suppresses a *reported* failure — it does nothing for a
+   step that never reports any conclusion at all, which is exactly what
+   a true hang is. Added `timeout-minutes: 5` to this step on all three
+   platform jobs (real captures take ~15-20s end to end per every
+   successful run's own logs, so 5 minutes is generous headroom) —
+   commit `63d3f59`. A future hang now fails fast and cleanly instead of
+   silently eating up to an hour and reddening the whole job over a
+   step whose own stated purpose is "a screenshot hiccup shouldn't fail
+   CI."
+
+2. **A well-reasoned but unconfirmed mitigation for the hang's likely
+   cause**: `capture-screenshot.sh`'s very first action, before the app
+   is even launched, is `pip install --user mss` — a network-fetching,
+   file-writing step with no logged output of its own (`--quiet`). This
+   same job's own `Exclude workspace from Windows Defender` step
+   earlier already documents real-time Defender scanning as "the single
+   biggest known cause of Windows CI being much slower" for `npm ci` —
+   but that exclusion only covers `github.workspace`, not wherever
+   `pip install --user` actually writes (the user profile directory,
+   entirely outside the workspace). Added a new step,
+   `Exclude Python's user install/cache paths from Windows Defender`,
+   computing the real paths via `python -m site --user-site`/
+   `--user-base` rather than hardcoding a guess (the exact path depends
+   on the runner image's Python version) plus pip's own cache directory
+   — commit `63d3f59`. **Not proven**: without logs from either actual
+   hang, this is informed reasoning from a documented, same-job
+   precedent, not a confirmed root cause. If the hang recurs even with
+   both the timeout bound and this exclusion in place, that's real
+   evidence this hypothesis was wrong and the actual cause lies
+   elsewhere (most likely inside `mss` itself, or the app launch further
+   down the same script) — worth a dedicated investigation with a way to
+   capture output before a hang (e.g. flushing progress lines to a file
+   polled from outside the step, since GitHub's own log retention has
+   now failed to preserve evidence twice) rather than guessing again.
