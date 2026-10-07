@@ -1378,10 +1378,9 @@ never was, and still isn't, strong evidence on its own — attempts 2 and
 3 above, where the race actually fired and was handled, are the evidence
 that matters here.)
 
-**Still left for the user/coordinator, deliberately not done here**:
-whether 3/3 real passes — two of which exercised the actual race live —
-is enough confidence to flip
-`.github/workflows/build.yml`'s windows-x64 `Smoke test (window-state
-regression, patches/0008)` step from `continue-on-error: true` back to
-blocking. Per the task's own ground rules this change does not make that
-flip itself.
+**Update**: judged sufficient — flipped back to blocking in
+`.github/workflows/build.yml`. 3/3 real passes, with the race itself
+firing live and recovering correctly in at least 2 of those 3 (plus an
+independent 4th confirmation when re-checking the evidence above), is
+materially stronger than the single clean run that was insufficient
+evidence the first time this step was flipped to blocking.
