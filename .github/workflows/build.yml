@@ -92,9 +92,21 @@ jobs:
       # (see capture-screenshot.sh's own comment for exactly why it
       # exists), not a correctness check — smoke-test.sh above is what
       # actually gates the build. A screenshot hiccup shouldn't fail CI.
+      #
+      # timeout-minutes is what actually makes that true. continue-on-error
+      # only suppresses a *reported* step failure — it does nothing for a
+      # step that never reports any conclusion at all. This exact step hung
+      # on windows-x64 twice (58min, then 66min) with no error, just
+      # "in_progress" forever until something force-ended the whole job as
+      # a failure — continue-on-error never got a chance to apply, because
+      # the step itself never finished. A real screenshot capture takes
+      # ~15-20s end to end (see the real run logs this was diagnosed
+      # against); 5 minutes is generous headroom while still failing fast
+      # enough that a hang here can never again take the whole job down.
       - name: Capture a screenshot of the running app
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           xvfb-run -a --server-args="-screen 0 1600x1000x24" \
@@ -297,10 +309,18 @@ jobs:
       # Non-blocking, same as the Linux job's own screenshot step —
       # evidence for Store-listing/marketing use, not a correctness
       # check (Smoke test above is what actually gates the build).
+      #
+      # timeout-minutes: this exact step on this exact job is the one
+      # that actually hung (twice — runs 37575028215 and 37639244025,
+      # 58min and 66min respectively, no error, just stuck "in_progress"
+      # until the whole job got force-ended as a failure). See the Linux
+      # job's equivalent step for the full reasoning on why
+      # continue-on-error alone doesn't protect against a true hang.
       - name: Capture a screenshot of the running app
         shell: bash
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           ./build/capture-screenshot.sh \
@@ -387,9 +407,17 @@ jobs:
       # correctness check. Runs before signing/notarizing below: it
       # doesn't touch the .app bundle's contents, just launches and
       # screenshots it, so there's no reason to wait.
+      #
+      # timeout-minutes: see the Linux/Windows jobs' equivalent steps —
+      # this exact step hung (with no error) on windows-x64 twice, and
+      # continue-on-error alone doesn't protect against a step that never
+      # reports any conclusion at all. Same bound applied here
+      # preemptively, on the theory that any platform's screenshot step
+      # could in principle hit the same kind of hang.
       - name: Capture a screenshot of the running app
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           ./build/capture-screenshot.sh \
