@@ -1555,5 +1555,69 @@ against, twice over. Left as a follow-up for a dedicated investigation
 that can actually iterate against real `macos-latest` runs, the same way
 the Windows extension above did.
 
-**CI verification status**: see the dated follow-up immediately below for
-real multi-platform run results.
+## 0008 Linux close-latency fix: real multi-platform, multi-run CI evidence (2026-10-07)
+
+Pushed as its own commit on top of this PR (`7cb37f5`), then that exact
+commit was exercised **three separate times** on real runners — the
+initial push plus two `gh run rerun`s of the same run ID (`37621393796`),
+each rerun a fresh VM per job, not a cached replay, the same technique
+this file's own Windows-hardening evidence above used:
+
+| Attempt | `linux-x64` job | its window-state step | `windows-x64` job | its window-state step | `macos-arm64` job |
+|---|---|---|---|---|---|
+| 1 (push) | success | success | success | success | success (no window-state step there) |
+| 2 (rerun) | success | success | success | success | success |
+| 3 (rerun) | success | success | success | success | success |
+
+**3/3 clean passes on every job that runs this check, on both platforms
+it runs on.** Pulling each attempt's actual job log (`gh api
+repos/.../actions/jobs/<id>/logs`) confirms the editor's close completed
+in well under 10 seconds in all six Linux+Windows runs — none of them
+happened to hit the CPU-contention window this fix targets, so the retry
+loop added above was never exercised live on real CI in this evidence set.
+Said plainly, the way this file's own discipline requires: unlike the
+Windows mid-frame-disconnect race (which fired live, twice, during its own
+verification runs), **this fix's retry path has direct, repeated evidence
+from deliberate local reproduction (CPU-pinned + oversubscribed, both
+sustained and tapering-load patterns, 7/7 taper trials against the real
+committed script recovering via exactly this retry path) but not yet a
+live firing on a real CI runner** — the bug this fix targets was, by its
+own nature (a CI-runner-contention-sensitive race, confirmed to need real
+starvation to reproduce even locally on a 36-core box), never guaranteed
+to recur on the very next few runs. Three clean runs is still meaningful
+evidence that the fix introduces no regression and that the normal
+(uncontended) path is unaffected, which is what these runs actually show;
+it is not, by itself, proof the retry path works on a real `windows-latest`
+or `ubuntu-latest` runner the way the Windows race's live recurrence was —
+that remains to be confirmed the next time this specific contention
+pattern happens to recur on a real runner, the same way the original bug
+itself only ever surfaced once in dozens of prior runs.
+
+**Recommendation on blocking vs. continue-on-error, for both platforms
+now that this step has been touched again**: keep both the `linux-x64`
+and `windows-x64` window-state-regression steps **blocking**, not a
+continue-on-error cooldown. Reasoning, following this PR's own two prior
+precedents rather than assuming either way:
+- The Windows race earlier in this file needed a continue-on-error
+  cooldown specifically because its root cause and fix were *not yet
+  understood or hardened* at the moment the first flake was seen — the
+  cooldown bought time to root-cause and verify before trusting it again.
+  That is not the situation here: the Linux race's root cause is now
+  understood in concrete mechanistic terms (confirmed by direct, repeated
+  local reproduction, not inferred), and the fix directly targets what the
+  evidence showed actually matters (re-dispatching the input, not merely
+  waiting longer — the one thing proven *not* to work on its own).
+- The regression-detection power of the check is unchanged and confirmed
+  so (`out11` still fails 3/3 locally with the fix in place) — a
+  continue-on-error cooldown would reduce confidence in catching a real
+  0008 regression for no corresponding gain, when the actual known risk
+  (a rare CPU-contention timeout) now has a concrete, verified mitigation
+  in place rather than an open question.
+- If this exact contention-sensitive timeout recurs on a real runner in
+  the future *despite* the retry fix (i.e. all 3 attempts are exhausted
+  and the step still fails), that would be new, important evidence this
+  fix's retry budget (90s/3 attempts) is insufficient under real CI
+  conditions — worth revisiting then with the real failure's own log as
+  evidence, the same way this entire investigation started. Nothing
+  observed so far points at that being likely enough to pre-emptively
+  weaken the check for.
