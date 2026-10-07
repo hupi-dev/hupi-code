@@ -1323,14 +1323,65 @@ that this is a narrow timing race more exposed on `windows-latest` than
 on this box's Xvfb setup, and confirming the hardening introduced no
 regression in the already-proven-correct Linux behavior.
 
-**Not yet run on Windows CI as of this commit** — the fake-server
-harness and the Linux regression sweep above are real, but neither one
-is `windows-latest`, and this file's own "there was no Windows hang" and
-"0008 Windows CI" sections are direct precedent for why source-level
-reasoning plus Linux-side testing is not a substitute for actually
-watching it on the real runner this bug was found on. The step stays
-`continue-on-error: true` in `.github/workflows/build.yml`; it should
-only be flipped to blocking after several real `windows-x64` runs are
-observed to pass with this change in place (see the follow-up note below
-once that evidence exists), and that flip should be a deliberate,
-separate decision, not something this change makes unilaterally.
+**Update: verified on real Windows CI, including the exact flake
+reproducing live and being handled correctly (2026-10-07).** This
+hardening was pushed as its own commit on top of PR #6
+(`aeaab22a76dbe77cb1b774812f4483abfa4a7084`) and that same commit/run was
+exercised three separate times on a real `windows-latest` runner (the
+same run ID, `37602171867`, rerun twice via `gh run rerun` — each rerun
+is a fresh VM, not a cache of the previous result):
+
+| Attempt | `windows-x64` job | `Smoke test (window-state regression, patches/0008)` step | Did the mid-frame disconnect actually fire? |
+|---|---|---|---|
+| 1 | success | success | No — clean pass, neither close action raced |
+| 2 | success | success | **Yes** — `keyUp`'s reply connection dropped with the identical `CDP websocket: connection closed mid-frame` message as the original flake; logged as benign and the check still passed |
+| 3 | success | success | **Yes** — same as attempt 2, `keyUp` raced again, logged as benign, check still passed |
+
+The attempt 2 and 3 log excerpts (`gh run view 37602171867 --log --job
+<id>`), both for the editor's close action:
+
+```
+==> closing the editor window first (real Ctrl+Shift+W via CDP)
+cdp_helper.py keypress-close-window: connection dropped while waiting for the keyUp reply (CDP websocket: connection closed mid-frame) -- treating this as the close action itself tearing down the CDP connection before it could answer, not as a failure of this step. The caller's own downstream check (window-absence / process-exit) is what actually confirms whether the close took effect.
+==> closing the Agents window second (real DOM close-icon click via CDP)
+==> waiting for the app to fully exit
+==> relaunching against the same --user-data-dir with no CLI arguments
+OK: both the editor window (testproject) and the Agents window reopened
+after being closed individually (editor first, then Agents) and the app
+relaunched — patches/0008's fix for the dropped-window-state regression
+is confirmed still in effect.
+```
+
+This is materially stronger evidence than "it passed 3 times" — the
+exact failure this change was written to tolerate actually recurred,
+twice, on the real runner it was first observed on, on the `keyUp` call
+specifically (not `rawKeyDown`, interesting in its own right: the
+keybinding fires and the window starts tearing down fast enough that by
+the time this script opens its *second*, separate connection for the
+keyup, the renderer is already gone — consistent with the "keydown is
+what triggers the close" reasoning above, and the reason
+`cmd_keypress_close_window`'s `keyUp` handling is the more lenient of the
+two). Both times, the script correctly logged it as a benign race rather
+than crashing, and — critically — the independent downstream
+`wait-absent` check still ran and still confirmed the window had
+genuinely closed and the relaunch genuinely restored both windows, so
+this is real evidence the fix preserves detection power, not just that
+it suppresses an error path.
+
+(For context, not part of this evidence set: an unrelated run the task's
+coordinator had already queued against the *pre-hardening* commit
+`e1e3170` — run `37600297022` — also happened to pass this time, i.e.
+the original unhardened script didn't flake on that particular attempt
+either. That's expected of an intermittent race and doesn't contradict
+anything above; it's simply a reminder that an occasional clean run
+never was, and still isn't, strong evidence on its own — attempts 2 and
+3 above, where the race actually fired and was handled, are the evidence
+that matters here.)
+
+**Still left for the user/coordinator, deliberately not done here**:
+whether 3/3 real passes — two of which exercised the actual race live —
+is enough confidence to flip
+`.github/workflows/build.yml`'s windows-x64 `Smoke test (window-state
+regression, patches/0008)` step from `continue-on-error: true` back to
+blocking. Per the task's own ground rules this change does not make that
+flip itself.
