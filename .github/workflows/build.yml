@@ -272,22 +272,30 @@ jobs:
       # desktop session the same way it already does for the Smoke test
       # and screenshot steps around this one).
       #
-      # Blocking, same as the Linux job's equivalent step: confirmed
-      # passing on its own merit (not masked by continue-on-error) on a
-      # real windows-latest run — PR #6's CI, run 37582039737, step
-      # "Smoke test (window-state regression, patches/0008)" reported
-      # `success` for this exact job. Ran with continue-on-error: true
-      # until that run existed, since this check launches the app three
-      # separate times plus the --agents single-instance relaunch —
+      # Back to continue-on-error: true — briefly flipped to blocking
+      # after PR #6's run 37582039737 passed cleanly, but the very next
+      # run on the same commit (37593639920) failed with
+      # `cdp_helper.py keypress-close-window: CDP websocket: connection
+      # closed mid-frame` — a transient disconnect during the first
+      # close action, not a logic regression (the script content didn't
+      # change between the two runs). This is exactly the real-flakiness
+      # risk this step's history already called out: three separate app
+      # launches plus the --agents single-instance relaunch is
       # meaningfully more process-management surface than the
-      # single-launch Smoke test above, and this repo has a real prior
-      # incident (UPSTREAM_UPGRADES.md's "there was no Windows hang" war
-      # story) of a check that looked right from source alone but wasn't
-      # until a human verified it on real Windows hardware. That
-      # verification has now happened.
+      # single-launch Smoke test above, and WebSocket connections over a
+      # loaded CI runner are a known source of this kind of transient
+      # drop. One green run was not, in hindsight, enough evidence to
+      # trust this as a hard merge gate — see
+      # docs/UPSTREAM_UPGRADES.md's "0008 Windows CI: a real flake found
+      # right after flipping to blocking" section for the full account.
+      # Flip back to blocking only after cdp_helper.py's connection
+      # handling is hardened against this (e.g. a bounded retry on
+      # connect/reconnect) and it's passed several real windows-latest
+      # runs in a row, not just one.
       - name: Smoke test (window-state regression, patches/0008)
         shell: bash
         working-directory: hupi-code
+        continue-on-error: true
         run: ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
       # Non-blocking, same as the Linux job's own screenshot step —

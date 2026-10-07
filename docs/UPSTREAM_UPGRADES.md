@@ -1128,6 +1128,43 @@ gating the build the way the Linux job's equivalent step does.
 **Update**: PR #6's CI (run `37582039737`) then actually exercised this
 on a real `windows-latest` runner, and the step reported `success` on
 its own merit, not masked by `continue-on-error`. That's the real run
-this section said to wait for — the step has been flipped to blocking
-in `.github/workflows/build.yml`, matching the Linux job's equivalent
-step.
+this section said to wait for — the step was flipped to blocking in
+`.github/workflows/build.yml`, matching the Linux job's equivalent step.
+
+## 0008 Windows CI: a real flake found right after flipping to blocking
+
+One green run turned out not to be enough. The very next CI run on the
+*same commit* (`37593639920`, script content unchanged from
+`37582039737`) failed:
+
+```
+==> closing the editor window first (real Ctrl+Shift+W via CDP)
+cdp_helper.py keypress-close-window: CDP websocket: connection closed mid-frame
+##[error]Process completed with exit code 1.
+```
+
+A transient WebSocket disconnect during the very first close action —
+not a logic regression (nothing in the script changed between the two
+runs), and not the same failure shape as the earlier screenshot-capture
+hang (that one never completed a step at all; this one failed fast,
+cleanly, with a clear error). This is precisely the risk the original
+`continue-on-error: true` reasoning called out before ever seeing a
+real run: three separate app launches plus the `--agents`
+single-instance relaunch is real process-management surface, and a
+WebSocket connection over a loaded, possibly-throttled CI runner is a
+known source of exactly this kind of drop — more load-bearing
+infrastructure than `build/smoke-test.sh`'s single launch has ever
+needed.
+
+**Reverted back to `continue-on-error: true`** rather than leaving it
+blocking and hoping the flake doesn't recur — a single confirmed pass
+was insufficient evidence, and this step gates every future Windows PR
+if left blocking. Before attempting the blocking flip again:
+
+1. Harden `build/cdp_helper.py`'s connection handling against a
+   transient drop — a bounded retry on initial connect and/or a
+   reconnect-and-resume path for a mid-sequence disconnect, rather than
+   failing the whole script on the first hiccup.
+2. Confirm the hardened version passes several real `windows-latest`
+   runs in a row (not just one), the same bar this session has already
+   held every other check in this file to.
