@@ -1384,3 +1384,176 @@ firing live and recovering correctly in at least 2 of those 3 (plus an
 independent 4th confirmation when re-checking the evidence above), is
 materially stronger than the single clean run that was insufficient
 evidence the first time this step was flipped to blocking.
+
+## 0008 Linux CI: a close-latency race under CPU contention, found right after the Windows race (2026-10-07)
+
+Right after the Windows hardening above shipped and both the `linux-x64`
+and `windows-x64` window-state-regression steps were blocking at the same
+time (commit `2e81eb3`), the very next real `linux-x64` CI run (run
+`37611036415`, job `112758076399`) failed — the **first time this
+Linux-specific step had ever failed**, across every prior run of this
+check on this PR. The log:
+
+```
+==> closing the editor window first (real Ctrl+Shift+W via CDP)
+timed out after 30.0s waiting for the page target containing 'workbench.html' to close
+FAIL: editor window did not close after dispatching Ctrl+Shift+W.
+type=page title='Agents' url='vscode-file://.../sessions.html'
+type=page title='Welcome - testproject - HUPI Code' url='vscode-file://.../workbench.html'
+```
+
+This is the **opposite** signature from the Windows race above: there,
+`cdp_helper.py` itself logged a connection-closed error (the close
+succeeded and tore the renderer down before it could reply). Here there is
+no CDP error at all — `keypress-close-window` returned cleanly — but the
+window genuinely never closed within the 30s poll. Two different bugs
+that happen to share one script, not the same bug on two platforms.
+
+**Hypotheses tested directly, not just reasoned about, and ruled out:**
+
+- *A focus precondition* — the idea that the Agents window stealing real
+  OS/Electron focus from the editor might stop the keybinding service from
+  processing a CDP-synthesized keydown. Reading the actual dispatch path
+  (`AbstractKeybindingService._dispatch`/`_doDispatch`,
+  `src/vs/platform/keybinding/common/abstractKeybindingService.ts`) shows
+  `_documentHasFocus()` (`this.hostService.hasFocus`) is only consulted by
+  the chord-mode leave-timer, never by `_dispatch` itself — a single-chord
+  binding like `Ctrl+Shift+W` has no focus precondition at all. Confirmed
+  empirically too: an added diagnostic (`document.hasFocus()` on the
+  editor's own target, read via CDP `Runtime.evaluate` right before
+  dispatch) came back **`false` in every single local run, pass or fail**
+  (25/25 unloaded passing runs, all 6/6 loaded failing runs) — opening the
+  Agents window reliably takes real focus away from the editor under this
+  environment's WM-less Xvfb, and that has never once stopped the close
+  from working when nothing else was wrong. Ruled out.
+- *The editor not having finished starting yet* — the idea that
+  `cmd_wait`'s "a `workbench.html` page target exists" check fires before
+  the workbench's own JS (and its keybinding listener) has actually
+  finished initializing, and that opening the Agents window doesn't always
+  give it enough real wall-clock time to catch up. Found a genuine,
+  authoritative readiness signal to test this against instead of guessing:
+  `src/vs/workbench/browser/workbench.ts` calls `mark('code/didStartWorkbench')`
+  once layout restore is fully done, and `src/vs/base/common/performance.ts`
+  confirms this is a real `performance.mark()` call in a renderer context,
+  readable via `performance.getEntriesByName('code/didStartWorkbench')`.
+  Deliberately slowed the editor's own startup (a workspace folder seeded
+  with 15,000 files) and dispatched the close keypress immediately once the
+  Agents window appeared, confirming via this same mark that the workbench
+  had **not** finished starting (`0` entries) at the moment of
+  dispatch — and the close still worked perfectly. The keybinding service
+  is constructed well before layout restore finishes; this readiness gate
+  doesn't gate the close at all. Ruled out.
+- *CPU/scheduler contention delaying the renderer's own processing of the
+  dispatched keydown* — confirmed, reproducibly, not just plausible. This
+  dev box has 36 cores and 194GB RAM, vastly more headroom than a typical
+  2-4 vCPU GitHub Actions runner, which is almost certainly why this had
+  never reproduced locally before (the same asymmetry the Windows
+  CDP-disconnect race above already ran into). Pinning the whole app to 2
+  CPUs (`taskset -c 0,1`) and oversubscribing those same 2 CPUs with 6
+  CPU-bound `yes` loops reproduced the **exact** failure signature above —
+  6/6 runs under sustained load, with no CDP error logged, the dispatch
+  call itself completing in well under a second, and the window simply
+  never closing. A follow-up test showed this is a genuine latency/loss
+  effect, not merely "give it more time": a single dispatch, waited on for
+  a full **150 seconds** under continuously sustained heavy load, still
+  never closed the window — ruling out "just raise the timeout" as a real
+  fix on its own. But re-dispatching the identical keypress once the
+  contention eased (a separate test that applied the same heavy load for
+  only the first ~20s of the run, then released it) recovered immediately,
+  3/3 times, with the exact same shape every time: attempt 1 times out
+  precisely like the real CI failure, attempt 2 (after contention eased)
+  succeeds. This points at the synthetic keydown's renderer-side effect —
+  keybinding dispatch, `CloseWindowAction.run()`, the async
+  `nativeHostService.closeWindow()` IPC call to the main process
+  (`src/vs/platform/native/electron-main/nativeHostMainService.ts`'s
+  `closeWindow()`, which just calls `window.win.close()`) — being lost
+  under contention somewhere along that chain, not merely queued and
+  delayed, since a passively longer wait on the *same* dispatch never
+  recovered but a fresh dispatch did.
+
+**Honesty about the limits of this root-cause**: the exact point in that
+chain where the first keydown's effect is lost (versus genuinely still
+in flight and simply never getting scheduled) was not isolated further —
+doing so would mean instrumenting Chromium/Electron's own C++ input
+pipeline, out of reach from this repo. What is confirmed, by direct
+reproduction rather than inference, is the *shape* of the failure (a
+CPU-contention-sensitive loss of a single synthetic keydown's effect, not
+a focus precondition, not a startup-readiness gap, and not fixed by
+passively waiting longer on that same dispatch) and that re-dispatching
+after a failed wait reliably recovers it.
+
+**The fix** (`build/smoke-test-window-state.sh`): replaced the single
+dispatch-then-wait-30s for the editor's close with a bounded retry — up to
+3 attempts, 30s each (90s total), re-sending the real `Ctrl+Shift+W`
+keypress on every attempt, not just re-polling the same one. This directly
+targets what the evidence above actually showed (re-dispatch recovers it;
+a longer single wait does not), rather than blindly raising the 30s
+number the way this file's own `cdp_helper.py` entry above already warned
+against for the analogous Windows case. `wait-absent` is still the only
+thing that decides pass/fail — a redispatch is `|| true`'d since the
+window may legitimately already be gone or already closing by the time a
+retry fires (same reasoning `cdp_helper.py`'s own `CDPConnectionLost`
+handling already uses: a connection problem talking to a window that's
+mid-close or already closed is not a failure of this step). The identical
+treatment was applied to the Agents-window close-and-wait-for-app-exit
+step immediately below it (also bumped from a flat 30s to a 3×30s=90s
+retry loop, re-clicking the close icon between attempts): it is the exact
+same `nativeHostService.closeWindow()` → `win.close()` → shutdown chain,
+just triggered by a DOM click instead of a keybinding, so the same
+CPU-contention mechanism could equally affect it — leaving it at a flat
+30s while fixing only the editor's analogous wait would have been an
+inconsistent half-fix for a risk this investigation now has direct
+evidence is real. No changes were needed to `cdp_helper.py` itself — its
+existing commands and their already-lenient treatment of a dropped
+connection on an already-closing target (see the Windows entry above) are
+exactly what a safe retry needs; no new CDP primitive (e.g.
+`Target.activateTarget`/`Page.bringToFront`) was added, since the ruled-out
+focus hypothesis is what would have motivated one, and the evidence above
+doesn't support it.
+
+**Local verification, repeated, both directions** (`out12`/`out-final` =
+post-0008, `out11` = pre-0008, the same builds the original 0008 and
+Windows-hardening entries above used):
+- **15/15** unloaded runs against `out12` and **10/10** unloaded runs
+  against `out-final` pass cleanly (no retries ever triggered — the retry
+  path is pure upside under normal conditions).
+- **3/3** unloaded runs against `out11` still correctly **FAIL** with
+  0008's own original regression signature — confirming the retry loop
+  does not weaken the check's ability to actually catch the regression it
+  exists for.
+- **5+** separate runs under deliberately *sustained* heavy CPU
+  contention (2 pinned CPUs, oversubscribed) reproduced the original
+  timeout on attempt 1 every time (matching real CI's failure exactly),
+  confirming the bug is real and reproducible on demand, not a one-off.
+- **5/5** runs under *tapering* contention (heavy for the first ~20s,
+  then released — a closer analogue to a real runner's transient noisy-
+  neighbor slowdown than indefinitely sustained starvation, which no real
+  CI runner would actually experience for an entire job) **all passed**,
+  every one showing attempt 1 fail with the exact real-CI symptom and
+  attempt 2 recover — run against both the scratch diagnostic copy and,
+  separately, the actual committed `build/smoke-test-window-state.sh`
+  file, to confirm the real shipped fix (not just the experiment harness)
+  behaves this way.
+- `build/smoke-test.sh` (untouched by this change, shared by all three
+  platform jobs) still passes cleanly against `out-final` — confirming
+  this fix, scoped entirely to `smoke-test-window-state.sh`, has no effect
+  on it.
+
+**macOS: deliberately still not extended, for a different reason than
+before.** The Windows-extension entry above left macOS alone because its
+native titlebar/window-controls model is different enough
+(`useWindowControlsOverlay()`'s `isMacintosh` carve-out) that the
+close-icon technique this whole script depends on has never been verified
+to even work there at all — that gap is unchanged by this investigation
+and wasn't the subject of it. Extending to macOS now would mean verifying
+*two* previously-unverified things at once on a platform with no local
+iteration available here (no macOS hardware on this box, only real CI
+runs) — the base close techniques, and this investigation's brand-new
+retry logic — compounding exactly the kind of unverified, plausible-
+sounding change this file's own `smoke-test.sh` war story already warns
+against, twice over. Left as a follow-up for a dedicated investigation
+that can actually iterate against real `macos-latest` runs, the same way
+the Windows extension above did.
+
+**CI verification status**: see the dated follow-up immediately below for
+real multi-platform run results.

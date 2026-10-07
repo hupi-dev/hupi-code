@@ -277,12 +277,44 @@ AGENTS_WS="$("$PYTHON" "$CDP_HELPER" wait "$PORT" sessions.html 60)" || {
 }
 
 echo "==> closing the editor window first (real Ctrl+Shift+W via CDP)"
-"$PYTHON" "$CDP_HELPER" keypress-close-window "$EDITOR_WS"
-"$PYTHON" "$CDP_HELPER" wait-absent "$PORT" workbench.html 30 || {
-  echo "FAIL: editor window did not close after dispatching Ctrl+Shift+W." >&2
+# Bounded retry (3 attempts, 30s each, 90s total), re-dispatching the real
+# keypress on every attempt — not a blind longer timeout. See
+# docs/UPSTREAM_UPGRADES.md's "0008 Linux CI: a close-latency race under
+# CPU contention" section for the full investigation: a real linux-x64 CI
+# run (37611036415) timed out here with no CDP error at all (unlike the
+# Windows race this file already documents, which fails *fast* with a
+# connection-drop error) — the keypress dispatch itself succeeded, but the
+# window never closed within the original flat 30s wait. Deliberately
+# starving this box's CPU (several `yes` processes pinned to the same 2
+# cores as the whole app, simulating a loaded/throttled shared CI runner)
+# reproduced the identical symptom on demand, and — critically — a single
+# dispatch still failed to close the window even after waiting a full 150s
+# under *sustained* contention, but re-dispatching the same keypress once
+# contention eased recovered immediately. That rules out "just needs a
+# longer single wait" (tested directly, and it doesn't help on its own)
+# and points at the synthetic keydown's renderer-side effect (keybinding
+# dispatch -> command execution -> the async closeWindow() IPC call to the
+# main process) being lost under contention, not merely delayed — so this
+# retries the actual input, not just the clock. wait-absent is still the
+# only thing that decides pass/fail; a redispatch on an already-closed/
+# closing window is harmless (keypress-close-window's own CDPConnectionLost
+# handling, or a plain connect failure here, both just mean there's no
+# renderer left to answer), so `|| true` on the dispatch call itself is
+# safe and intentional.
+EDITOR_CLOSE_OK=0
+for attempt in 1 2 3; do
+  "$PYTHON" "$CDP_HELPER" keypress-close-window "$EDITOR_WS" || true
+  if "$PYTHON" "$CDP_HELPER" wait-absent "$PORT" workbench.html 30; then
+    EDITOR_CLOSE_OK=1
+    break
+  fi
+  echo "==> editor window still present after attempt $attempt/3 (30s each) -- retrying the keypress" >&2
+done
+if [[ "$EDITOR_CLOSE_OK" -ne 1 ]]; then
+  echo "FAIL: editor window did not close after dispatching Ctrl+Shift+W (3 attempts, 90s total)." >&2
   "$PYTHON" "$CDP_HELPER" titles "$PORT" >&2
   exit 1
-}
+fi
 
 echo "==> closing the Agents window second (real DOM close-icon click via CDP)"
 CLICKED="$("$PYTHON" "$CDP_HELPER" click-close-button "$AGENTS_WS")"
@@ -294,12 +326,25 @@ if [[ "$CLICKED" != "true" ]]; then
 fi
 
 echo "==> waiting for the app to fully exit"
-for _ in $(seq 1 30); do
-  kill -0 "$APP_PID" 2>/dev/null || break
-  sleep 1
+# Same retry treatment as the editor close above, and for the same reason:
+# this exercises the identical async closeWindow()-IPC-then-shutdown
+# machinery (just triggered by a DOM click instead of a keybinding), so the
+# same CPU-contention mechanism could equally delay or drop its effect.
+# Re-clicking a window that's already mid-shutdown is harmless (the click
+# expression is a no-op once the element/window is gone) -- the process-
+# exit poll is what actually decides pass/fail either way.
+APP_EXITED=0
+for attempt in 1 2 3; do
+  for _ in $(seq 1 30); do
+    kill -0 "$APP_PID" 2>/dev/null || { APP_EXITED=1; break; }
+    sleep 1
+  done
+  [[ "$APP_EXITED" -eq 1 ]] && break
+  echo "==> app still running after attempt $attempt/3 (30s each) -- re-clicking the Agents close icon" >&2
+  "$PYTHON" "$CDP_HELPER" click-close-button "$AGENTS_WS" > /dev/null 2>&1 || true
 done
-if kill -0 "$APP_PID" 2>/dev/null; then
-  echo "FAIL: app did not exit within 30s of closing both windows — either the" >&2
+if [[ "$APP_EXITED" -ne 1 ]]; then
+  echo "FAIL: app did not exit within 90s of closing both windows — either the" >&2
   echo "close sequence above didn't really close the last window, or shutdown" >&2
   echo "itself is hanging. Neither is something a relaunch check can usefully" >&2
   echo "run against." >&2
