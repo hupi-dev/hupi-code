@@ -1168,3 +1168,169 @@ if left blocking. Before attempting the blocking flip again:
 2. Confirm the hardened version passes several real `windows-latest`
    runs in a row (not just one), the same bar this session has already
    held every other check in this file to.
+
+## Hardening `cdp_helper.py` against the mid-frame disconnect (2026-10-07)
+
+**Tracing the exact failure, not guessing.** The log line is
+`cdp_helper.py keypress-close-window: CDP websocket: connection closed
+mid-frame`. That exact string is raised in exactly one place in
+`cdp_helper.py`: `ws_recv_frame`'s inner `recv_exact`, when `sock.recv()`
+returns `b''` (an abrupt TCP EOF) while reading a frame's header or
+payload bytes. That's a meaningfully different code path from:
+- the WebSocket *handshake* (`ws_connect`), which has its own, different
+  message (`"connection closed before headers completed"`) — not what
+  fired here, so the TCP connection and the HTTP Upgrade handshake both
+  completed successfully;
+- a *clean* WebSocket close handshake (opcode `0x8`), which also has its
+  own distinct message (`"server closed the connection"`) — not what
+  fired here either, so this was a raw, abrupt socket death, not a
+  graceful protocol-level close;
+- a timeout (`ws_rpc`'s own deadline raises a separate `TimeoutError`) —
+  not what fired here, so the process didn't just go quiet, the TCP
+  connection itself died.
+
+`cmd_keypress_close_window` makes exactly two `ws_rpc` calls, each
+opening its *own* fresh TCP connection (`ws_rpc` calls `ws_connect`
+internally): one for the `rawKeyDown` `Input.dispatchKeyEvent`, one for
+the `keyUp`. The failure happened on "the first close action" per the
+log, i.e. during one of these two calls, after its handshake had already
+succeeded and its request had already been sent (`ws_send_text` doesn't
+raise) — the socket died while this script was waiting for the JSON
+reply.
+
+**Root cause: this is category (a), an inherent property of the
+technique, not CI-runner resource contention and not a bug in the
+hand-rolled framing.** `rawKeyDown` is what actually fires VS Code's
+keybinding service (keybindings act on keydown, not keyup) —
+dispatching it is what triggers `workbench.action.closeWindow` to run,
+synchronously, inside the renderer whose own CDP agent is the thing
+answering this exact RPC. If the close begins tearing the renderer (and
+therefore this WebSocket) down before the devtools agent finishes
+writing the reply frame, the client sees precisely an abrupt EOF
+mid-frame — not a clean close, because there was no time left in the
+renderer's lifecycle to perform one. In other words: the thing this
+script is trying to cause (the window closing) is itself what kills the
+connection used to cause it. This was confirmed by reasoning through the
+actual call sequence above, not assumed — and it also explains why this
+never showed up in dozens of local Linux runs so far (see below): it's a
+timing race, not a deterministic bug, and Linux's Xvfb-driven renderer
+teardown happens to be slow enough relative to this script's own
+recv loop that the race window hasn't been hit here, while a loaded
+`windows-latest` runner apparently can be fast/jittery enough to hit it.
+
+A **bare retry of the same keypress is the wrong fix**: if the close
+already succeeded, retrying `Input.dispatchKeyEvent` would try to
+reconnect to a WebSocket endpoint that may already be completely gone
+(the window — and its devtools agent — no longer exists), turning a
+success into a spurious hard failure. The Windows Defender angle from
+the task brief was also considered and ruled out: the existing exclusion
+(`Add-MpPreference -ExclusionPath "${{ github.workspace }}"`,
+`.github/workflows/build.yml`) is a *file-path* real-time-scan exclusion
+for `npm ci`'s tens of thousands of writes; it has no mechanism that
+would touch a loopback TCP/WebSocket connection, and the failure shape
+(abrupt EOF exactly when the close-triggering keydown's reply was due,
+not a generic slow/dropped connection at a random point) doesn't match
+"antivirus scanning interference" either. A plain CI-runner timing issue
+(slow loopback, GC pause) was also considered, and a **bounded retry on
+*connection establishment* specifically** was added for that general
+class of transient hiccup (see below) — but it is not the explanation
+for the actual logged failure, which happened well past the point where
+a connect-time retry would even apply (it had already connected,
+handshaken, and sent the command).
+
+**What changed in `build/cdp_helper.py`:**
+- A new `CDPConnectionLost` exception type distinguishes "the socket
+  died abruptly" (mid-frame EOF/reset, or a clean close-frame) from a
+  protocol error (bad handshake) or a timeout (target alive but slow) —
+  see its docstring.
+- `ws_connect` gained a bounded retry (3 attempts, 0.3s apart) around
+  connection establishment *and* the handshake only — for the
+  CI-runner-timing hypothesis, kept narrowly scoped to the phase where a
+  retry can't be ambiguous about whether the target already did what was
+  asked.
+- `cmd_keypress_close_window` now treats a `CDPConnectionLost` on the
+  `rawKeyDown` call as a likely sign the close already happened — it
+  logs a clear, specific message to stderr and returns success rather
+  than crashing the whole script, instead of trying (and failing) to
+  reconnect for the `keyUp`. If `rawKeyDown` got a normal reply, `keyUp`
+  is still attempted, and a connection problem there (lost mid-frame, or
+  unable to reconnect at all) gets the same tolerant treatment, since the
+  keybinding has already fired by that point regardless of what happens
+  to `keyUp`. A genuine `TimeoutError` (the target is alive but never
+  answers) is deliberately *not* given this treatment anywhere — Python
+  3.10+ makes `TimeoutError` a subclass of `OSError`, so this had to be
+  special-cased explicitly to avoid accidentally swallowing a real hang
+  as if it were a benign disconnect.
+- `cmd_click_close_button` (the Agents window's close, which also
+  synchronously triggers `nativeHostService.closeWindow()` from inside
+  the `Runtime.evaluate` call being answered) gets the same treatment:
+  a `CDPConnectionLost` is logged and treated as the click having
+  already gone through.
+- Critically, **this does not weaken the actual regression check**:
+  `build/smoke-test-window-state.sh` already runs an independent
+  downstream verification after each close action regardless —
+  `wait-absent` (polls `/json/list` until the window is actually gone)
+  for the keyboard close, and the subsequent bounded wait for the whole
+  app process to exit for the click close. If a close action is logged
+  as a "benign" disconnect but the window didn't actually close, those
+  checks still fail loudly and specifically, exactly as before. If
+  anything this is a *more* accurate test than before the fix: previously
+  a transient disconnect on `keypress-close-window` killed the whole
+  script immediately (via `set -e`) without ever consulting
+  `wait-absent` at all, even in cases where the window really had
+  closed — a false failure. A genuine, non-close-related hang
+  (`TimeoutError`) still fails fast and loudly, as verified below.
+
+**Verification this isn't just "retry until it looks right": a fake CDP
+server test harness** (not committed — a throwaway script, since this
+repo doesn't otherwise have a unit-test setup for `cdp_helper.py`) was
+used to directly exercise the four scenarios a bare Linux run can't
+reliably trigger on demand:
+- `rawKeyDown`'s reply connection dropped abruptly → logged as benign,
+  exit 0, `keyUp` not attempted (no renderer left to send it to).
+- `rawKeyDown` replies normally, `keyUp`'s reply connection then drops →
+  logged as benign, exit 0.
+- `rawKeyDown` replies normally, the listening socket is gone entirely
+  before `keyUp` can even connect (`ConnectionRefusedError`) → logged as
+  benign, exit 0.
+- Both replies normal (sanity baseline) → silent, exit 0, no spurious
+  warnings.
+- A target that's simply unreachable from the start (nothing listening)
+  → still a real, fast (~0.7s, after the bounded connect retries) hard
+  failure, exit 1, clear message. Confirms the connect-retry doesn't
+  mask a genuinely broken target.
+- A target that accepts the connection, completes the handshake, reads
+  the command, and then genuinely hangs (never replies, never
+  disconnects) on the `keyUp` call specifically (the one with the
+  widened `OSError` catch) → still a real, hard failure after the full
+  15s timeout budget, exit 1. This was the one case worth real
+  skepticism about (since `TimeoutError` is an `OSError` subclass), and
+  it was caught by an explicit `except TimeoutError: raise` ahead of the
+  broader catch — confirmed by actually running it, not just reasoning
+  about exception hierarchies.
+
+**Local regression check against the real builds already on disk**
+(`out11` = pre-0008, `out12`/`out-final` = post-0008, per the "0008
+before/after build-verification result" section above), run repeatedly
+under `xvfb-run` on this Linux box with the hardened script: **3/3**
+runs against `out11` still correctly **FAIL** (`editor present: 0,
+Agents present: 1`, patches/0008's own regression signature, unchanged
+from pre-hardening behavior), and **8/8** runs across `out12` (3) and
+`out-final` (5) still correctly **PASS** (`OK: both the editor window
+... and the Agents window reopened`). None of these Linux runs ever hit
+the benign-disconnect path — consistent with the root-cause theory above
+that this is a narrow timing race more exposed on `windows-latest` than
+on this box's Xvfb setup, and confirming the hardening introduced no
+regression in the already-proven-correct Linux behavior.
+
+**Not yet run on Windows CI as of this commit** — the fake-server
+harness and the Linux regression sweep above are real, but neither one
+is `windows-latest`, and this file's own "there was no Windows hang" and
+"0008 Windows CI" sections are direct precedent for why source-level
+reasoning plus Linux-side testing is not a substitute for actually
+watching it on the real runner this bug was found on. The step stays
+`continue-on-error: true` in `.github/workflows/build.yml`; it should
+only be flipped to blocking after several real `windows-x64` runs are
+observed to pass with this change in place (see the follow-up note below
+once that evidence exists), and that flip should be a deliberate,
+separate decision, not something this change makes unilaterally.

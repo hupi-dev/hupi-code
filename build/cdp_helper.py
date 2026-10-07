@@ -32,7 +32,30 @@ def http_get_json(url, timeout=10):
 		return json.loads(resp.read().decode('utf-8'))
 
 
-def ws_connect(ws_url):
+class CDPConnectionLost(RuntimeError):
+	"""The underlying TCP/WebSocket connection dropped out from under us —
+	distinct from a protocol-level error (bad handshake response) or a
+	plain timeout (server alive but slow/stuck). Raised specifically when
+	the socket produces an abrupt EOF/reset rather than a clean WebSocket
+	close handshake, which is exactly the shape a renderer process dying
+	mid-response looks like (see docs/UPSTREAM_UPGRADES.md's "0008 Windows
+	CI: a real flake found right after flipping to blocking" section).
+	Some callers treat this as a potentially benign signal rather than a
+	hard failure — see cmd_keypress_close_window/cmd_click_close_button —
+	because the two operations that matter most here (a keypress or DOM
+	click that itself triggers a real window close) are expected to
+	sometimes race the very CDP connection being used to trigger them: the
+	close can succeed and tear the renderer (and this socket) down before
+	a reply is ever sent. A bare retry of the same input against an
+	already-closing/closed target would be the wrong fix for that case;
+	this exception exists so callers can distinguish "the thing we were
+	trying to cause probably already happened" from "something is
+	actually broken." Other RuntimeErrors (handshake rejected, no page
+	target, etc.) are not using this type and are not given this leniency
+	anywhere — they indicate a real, non-close-related problem."""
+
+
+def ws_connect(ws_url, connect_retries=3, retry_delay_s=0.3):
 	# A hand-rolled client, not a browser, so there is no Origin header
 	# to satisfy --remote-allow-origins's check — but the launcher script
 	# still passes that flag anyway, matching the exact recipe
@@ -45,28 +68,55 @@ def ws_connect(ws_url):
 	path = '/' + path
 	host, _, port_s = hostport.partition(':')
 	port = int(port_s) if port_s else 80
-	sock = socket.create_connection((host, port), timeout=10)
-	key = base64.b64encode(os.urandom(16)).decode()
-	request = (
-		f'GET {path} HTTP/1.1\r\n'
-		f'Host: {hostport}\r\n'
-		'Upgrade: websocket\r\n'
-		'Connection: Upgrade\r\n'
-		f'Sec-WebSocket-Key: {key}\r\n'
-		'Sec-WebSocket-Version: 13\r\n'
-		'\r\n'
-	)
-	sock.sendall(request.encode('ascii'))
-	response = b''
-	while b'\r\n\r\n' not in response:
-		chunk = sock.recv(4096)
-		if not chunk:
-			raise RuntimeError('CDP websocket handshake: connection closed before headers completed')
-		response += chunk
-	status_line = response.split(b'\r\n', 1)[0]
-	if b'101' not in status_line:
-		raise RuntimeError(f'CDP websocket handshake rejected: {status_line!r}')
-	return sock
+
+	# Bounded retry around connection establishment + handshake only (not
+	# around sending a command or waiting for its reply — see ws_rpc and
+	# the CDPConnectionLost docstring for why those need different
+	# handling). This covers a genuinely different failure mode than the
+	# close-vs-connection race: a loaded/throttled CI runner's loopback
+	# network or a port that's registered in /json/list a moment before
+	# its WebSocket server is actually ready to accept upgrades. Those are
+	# plain transient connect-time hiccups with no "the target already
+	# did what we wanted" ambiguity, so a short retry here is safe and
+	# appropriate in a way it would not be for an in-flight command.
+	last_exc = None
+	for attempt in range(1, connect_retries + 1):
+		sock = None
+		try:
+			sock = socket.create_connection((host, port), timeout=10)
+			key = base64.b64encode(os.urandom(16)).decode()
+			request = (
+				f'GET {path} HTTP/1.1\r\n'
+				f'Host: {hostport}\r\n'
+				'Upgrade: websocket\r\n'
+				'Connection: Upgrade\r\n'
+				f'Sec-WebSocket-Key: {key}\r\n'
+				'Sec-WebSocket-Version: 13\r\n'
+				'\r\n'
+			)
+			sock.sendall(request.encode('ascii'))
+			response = b''
+			while b'\r\n\r\n' not in response:
+				chunk = sock.recv(4096)
+				if not chunk:
+					raise CDPConnectionLost('CDP websocket handshake: connection closed before headers completed')
+				response += chunk
+			status_line = response.split(b'\r\n', 1)[0]
+			if b'101' not in status_line:
+				# A real protocol-level rejection, not a dropped
+				# connection — retrying won't change a deterministic
+				# rejection, so this is deliberately not caught below.
+				raise RuntimeError(f'CDP websocket handshake rejected: {status_line!r}')
+			return sock
+		except (OSError, CDPConnectionLost) as e:
+			last_exc = e
+			if sock is not None:
+				sock.close()
+			if attempt < connect_retries:
+				time.sleep(retry_delay_s)
+				continue
+			raise
+	raise last_exc  # pragma: no cover — loop above always returns or raises
 
 
 def ws_send_text(sock, payload):
@@ -92,9 +142,31 @@ def ws_recv_frame(sock):
 	def recv_exact(n):
 		buf = b''
 		while len(buf) < n:
-			chunk = sock.recv(n - len(buf))
+			try:
+				chunk = sock.recv(n - len(buf))
+			except (ConnectionResetError, BrokenPipeError) as e:
+				# A hard RST surfaces as an exception here instead of
+				# recv() returning b'' — same underlying "the socket died"
+				# event as the empty-chunk case just below, so it gets the
+				# same treatment and the same exception type. Deliberately
+				# NOT catching socket.timeout/TimeoutError here: a timeout
+				# means the process is still alive but slow/stuck, which
+				# is a real, distinct failure (budget exceeded) that must
+				# not be downgraded to "assume the close succeeded" —
+				# doing so would let a genuine hang masquerade as success.
+				raise CDPConnectionLost(f'CDP websocket: connection closed mid-frame ({e})') from e
 			if not chunk:
-				raise RuntimeError('CDP websocket: connection closed mid-frame')
+				# An abrupt TCP EOF/reset while we were mid-read for a
+				# frame header or payload — not a clean WebSocket close
+				# handshake (that's the opcode 0x8 branch in ws_rpc
+				# below, which gets a different message). This is the
+				# exact shape logged as "CDP websocket: connection closed
+				# mid-frame" in PR #6's run 37593639920: the socket died
+				# while waiting on the reply to the very command that
+				# dispatched a close-triggering keypress, consistent with
+				# the renderer tearing itself (and this connection) down
+				# as part of actually closing, not a corrupted frame.
+				raise CDPConnectionLost('CDP websocket: connection closed mid-frame')
 			buf += chunk
 		return buf
 
@@ -122,7 +194,11 @@ def ws_rpc(ws_url, method, params, timeout_s=15):
 		while time.time() < deadline:
 			opcode, payload = ws_recv_frame(sock)
 			if opcode == 0x8:
-				raise RuntimeError('CDP websocket: server closed the connection')
+				# A clean WebSocket close handshake rather than an abrupt
+				# drop — still the same underlying "no reply is coming"
+				# situation as CDPConnectionLost, so it's treated the same
+				# way by callers (see that class's docstring).
+				raise CDPConnectionLost('CDP websocket: server closed the connection')
 			if opcode != 0x1:
 				continue  # ignore ping/binary frames
 			message = json.loads(payload.decode('utf-8'))
@@ -179,23 +255,81 @@ def cmd_wait_absent(args):
 	return 1
 
 
+def _warn_benign_close_race(command, step, err):
+	# See CDPConnectionLost's docstring: closing a window and holding a
+	# CDP connection open to the thing being closed are in tension by
+	# nature, so a drop here — right after we've already successfully
+	# *sent* the command that triggers the close — is treated as
+	# plausible evidence the close worked, not proof it didn't. This is
+	# deliberately NOT a silent swallow: it's logged clearly, and the
+	# caller script (build/smoke-test-window-state.sh) always runs an
+	# independent downstream check afterwards (wait-absent for the
+	# keyboard close, the app-process-exit wait for the click close) that
+	# is the actual pass/fail signal — if the close didn't really happen,
+	# that check fails loudly and specifically instead.
+	sys.stderr.write(
+		f'cdp_helper.py {command}: connection dropped while waiting for the '
+		f'{step} reply ({err}) -- treating this as the close action itself '
+		'tearing down the CDP connection before it could answer, not as a '
+		'failure of this step. The caller\'s own downstream check (window-'
+		'absence / process-exit) is what actually confirms whether the '
+		'close took effect.\n'
+	)
+
+
 def cmd_keypress_close_window(args):
 	"""keypress-close-window WS_URL — dispatches a real Ctrl+Shift+W to the
 	given page target, the exact CDP Input.dispatchKeyEvent sequence
 	docs/UPSTREAM_UPGRADES.md's 0008 investigation confirmed actually
 	exercises workbench.action.closeWindow's real close path (unlike
 	Target.closeTarget/Page.close, which bypass it and produce false
-	negatives — see that doc for the full story of why)."""
+	negatives — see that doc for the full story of why).
+
+	The keydown is what actually triggers the keybinding (VS Code's
+	keybinding service acts on keydown), so it's the one that can race the
+	renderer tearing itself — and this CDP connection — down before a
+	reply is sent back; a CDPConnectionLost there is treated as a likely
+	sign the close already happened rather than a hard failure (see
+	CDPConnectionLost's docstring and docs/UPSTREAM_UPGRADES.md's "0008
+	Windows CI: a real flake found right after flipping to blocking"
+	section for the real CI failure this hardens against). If the keydown
+	already lost the connection there is no renderer left to send the
+	keyup to, so this returns immediately rather than trying (and failing)
+	to reconnect for it. If the keydown's reply came back normally, the
+	keyup is still attempted, and a connection problem there — including
+	not being able to reconnect at all, since each RPC call opens its own
+	fresh connection (see ws_rpc) — gets the same benign treatment: by
+	this point keydown has already been confirmed delivered-and-answered,
+	so the keybinding has already fired regardless of what happens to the
+	keyup. The keydown's own leniency is intentionally narrower
+	(CDPConnectionLost only, not a failure to connect at all) because it's
+	the one RPC that must actually have been delivered for this command to
+	mean anything."""
 	ws_url = args[0]
 	mod = 2 | 8  # Ctrl (2) | Shift (8)
-	ws_rpc(ws_url, 'Input.dispatchKeyEvent', {
-		'type': 'rawKeyDown', 'modifiers': mod,
-		'windowsVirtualKeyCode': 87, 'code': 'KeyW', 'key': 'W',
-	})
-	ws_rpc(ws_url, 'Input.dispatchKeyEvent', {
-		'type': 'keyUp', 'modifiers': mod,
-		'windowsVirtualKeyCode': 87, 'code': 'KeyW', 'key': 'W',
-	})
+	try:
+		ws_rpc(ws_url, 'Input.dispatchKeyEvent', {
+			'type': 'rawKeyDown', 'modifiers': mod,
+			'windowsVirtualKeyCode': 87, 'code': 'KeyW', 'key': 'W',
+		})
+	except CDPConnectionLost as e:
+		_warn_benign_close_race('keypress-close-window', 'rawKeyDown', e)
+		return 0
+	try:
+		ws_rpc(ws_url, 'Input.dispatchKeyEvent', {
+			'type': 'keyUp', 'modifiers': mod,
+			'windowsVirtualKeyCode': 87, 'code': 'KeyW', 'key': 'W',
+		})
+	except TimeoutError:
+		# NOT given the lenient treatment below: TimeoutError is a subclass
+		# of OSError in Python 3.10+ (a bare `except OSError` would also
+		# catch it), but a timeout means the target is still alive and
+		# just never answered within budget — a real, distinct failure
+		# that must surface as such rather than be mistaken for "the
+		# window closed out from under the connection."
+		raise
+	except (CDPConnectionLost, OSError) as e:
+		_warn_benign_close_race('keypress-close-window', 'keyUp', e)
 	return 0
 
 
@@ -208,13 +342,27 @@ def cmd_click_close_button(args):
 	in the DOM instead of being drawn as an OS-compositor-owned Window
 	Controls Overlay region with nothing for CDP to click. Prints
 	"true"/"false" depending on whether the element was found and
-	clicked."""
+	clicked.
+
+	The click handler calls nativeHostService.closeWindow() synchronously
+	(see this script's own top-of-file/smoke-test-window-state.sh
+	comments), so — same reasoning as cmd_keypress_close_window above —
+	losing the connection while waiting for Runtime.evaluate's reply is
+	treated as the click having gone through and the window tearing down
+	before it could answer back, not a hard failure. The caller's
+	subsequent wait for the whole app process to exit is the real check
+	for whether this actually worked."""
 	ws_url = args[0]
 	expr = (
 		"(() => { const el = document.querySelector('.window-icon.window-close'); "
 		"if (el) { el.click(); return true; } return false; })()"
 	)
-	result = ws_rpc(ws_url, 'Runtime.evaluate', {'expression': expr, 'returnByValue': True})
+	try:
+		result = ws_rpc(ws_url, 'Runtime.evaluate', {'expression': expr, 'returnByValue': True})
+	except CDPConnectionLost as e:
+		_warn_benign_close_race('click-close-button', 'Runtime.evaluate', e)
+		print('true')
+		return 0
 	value = result.get('result', {}).get('result', {}).get('value')
 	print('true' if value else 'false')
 	return 0
