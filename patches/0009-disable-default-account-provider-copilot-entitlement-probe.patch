@@ -1,0 +1,48 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index d57319b..e1412c2 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -275,6 +275,7 @@ export interface IProductConfiguration {
+ 	readonly hupiDisableChatSetup?: boolean;
+ 	readonly hupiDisableNativeChatView?: boolean;
+ 	readonly hupiDisableCopilotAccountSignIn?: boolean;
++	readonly hupiDisableDefaultAccountProvider?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/workbench/services/accounts/browser/defaultAccount.ts b/src/vs/workbench/services/accounts/browser/defaultAccount.ts
+index ed17979..d37a742 100644
+--- a/src/vs/workbench/services/accounts/browser/defaultAccount.ts
++++ b/src/vs/workbench/services/accounts/browser/defaultAccount.ts
+@@ -1641,6 +1641,31 @@ class DefaultAccountProviderContribution extends Disposable implements IWorkbenc
+ 		@IDefaultAccountService defaultAccountService: IDefaultAccountService,
+ 	) {
+ 		super();
++
++		// HUPI Code patch: this contribution runs unconditionally at
++		// `WorkbenchPhase.BlockStartup` and, through `DefaultAccountProvider`
++		// below, silently probes product.defaultChatAgent's GitHub Copilot
++		// entitlement endpoints (api.github.com/copilot_internal/user,
++		// /v2/token, /managed_settings) using *any* pre-existing 'github'
++		// authentication session — one created for Settings Sync, Source
++		// Control, or any other extension using the generic built-in GitHub
++		// auth provider, not anything Copilot-specific. `defaultChatAgent`
++		// itself is left fully populated by this build's own
++		// product-overlay.json (other patches in this chain only gate UI
++		// registration, never this), so unlike those upstream endpoints,
++		// this one is still live and reachable with a real GitHub OAuth
++		// token attached — confirmed via a real build, see
++		// docs/UPSTREAM_UPGRADES.md's "0009" entry for the before/after
++		// trace. A HUPI Code build has no Copilot entitlement to check, so
++		// there is nothing here worth asking GitHub about; leaving
++		// `defaultAccountProvider` unset on `IDefaultAccountService` is
++		// safe — every consumer (`ChatEntitlementService`,
++		// `AccountPolicyGateContribution`) already treats "no provider set"
++		// as the ordinary "no account" state via optional chaining.
++		if (productService.hupiDisableDefaultAccountProvider) {
++			return;
++		}
++
+ 		const defaultAccountProvider = this._register(instantiationService.createInstance(DefaultAccountProvider, toDefaultAccountConfig(productService.defaultChatAgent)));
+ 		defaultAccountService.setDefaultAccountProvider(defaultAccountProvider);
+ 	}
