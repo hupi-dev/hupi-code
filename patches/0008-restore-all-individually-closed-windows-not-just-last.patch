@@ -1,0 +1,73 @@
+diff --git a/src/vs/platform/windows/electron-main/windowsStateHandler.ts b/src/vs/platform/windows/electron-main/windowsStateHandler.ts
+index 0336fb4b..8d545a88 100644
+--- a/src/vs/platform/windows/electron-main/windowsStateHandler.ts
++++ b/src/vs/platform/windows/electron-main/windowsStateHandler.ts
+@@ -59,6 +59,22 @@ export class WindowsStateHandler extends Disposable {
+ 
+ 	private lastClosedState: IWindowState | undefined = undefined;
+ 
++	// Every window's state, captured individually as each one closes (not just
++	// the one that happens to close last). On Windows/Linux a user very often
++	// closes multiple windows one at a time rather than via a single "Quit"
++	// action, each via its own close button. `lastClosedState` above only ever
++	// remembers whichever window happened to be the *last* one standing right
++	// before it, in turn, closed — a real HUPI Code certification bug (closing
++	// the main editor window before the Agents/Sessions window, see
++	// docs/UPSTREAM_UPGRADES.md for the full repro) was traced to exactly this:
++	// by the time the final `onBeforeShutdown` runs with zero windows left,
++	// `windowsMainService.getWindows()` is already empty, so the "all windows"
++	// snapshot below (guarded on `getWindowCount() > 1`) never captures
++	// anything, and every window that closed before the very last one is
++	// silently dropped from `openedWindows` with no fallback at all. This list
++	// is that fallback.
++	private lastClosedWindows: IWindowState[] = [];
++
+ 	private shuttingDown = false;
+ 
+ 	constructor(
+@@ -95,6 +111,7 @@ export class WindowsStateHandler extends Disposable {
+ 				// otherwise closing the last window, opening a new window and then quitting would
+ 				// use the state of the previously closed window when restarting.
+ 				this.lastClosedState = undefined;
++				this.lastClosedWindows = [];
+ 			}
+ 		}));
+ 
+@@ -214,6 +231,21 @@ export class WindowsStateHandler extends Disposable {
+ 			});
+ 		}
+ 
++		// 3b.) No windows left at all, but more than one closed individually on
++		// the way down (Windows/Linux, closed one at a time rather than via a
++		// single "Quit" that closes every window together): getWindows() above
++		// is already empty by now, so block 3 never runs, and `lastActiveWindow`
++		// (set from `lastClosedState` just above) only ever remembers whichever
++		// window happened to close *last*. Every earlier-closed window would
++		// otherwise vanish from `openedWindows` with nothing to fall back to.
++		// `lastClosedWindows` (populated in `onBeforeCloseWindow` below) is the
++		// full set of windows that closed this way; use it so `restoreWindows:
++		// all` (the default) still has all of them to restore, not just the one
++		// that happened to close last.
++		else if (this.windowsMainService.getWindowCount() === 0 && this.lastClosedWindows.length > 1) {
++			currentWindowsState.openedWindows = this.lastClosedWindows;
++		}
++
+ 		// Persist
+ 		const state = getWindowsStateStoreData(currentWindowsState);
+ 		this.stateService.setItem(WindowsStateHandler.windowsStateStorageKey, state);
+@@ -247,6 +279,15 @@ export class WindowsStateHandler extends Disposable {
+ 			});
+ 		}
+ 
++		// Remember every non extension host window's state as it closes, not just
++		// whichever one happens to close last. See the comment on
++		// `lastClosedWindows`'s declaration for why: this is what lets
++		// `saveWindowsState()` still restore every window when they were closed
++		// one at a time (Windows/Linux) rather than all together via `Quit`.
++		if (!window.isExtensionDevelopmentHost) {
++			this.lastClosedWindows.push(state);
++		}
++
+ 		// On Windows and Linux closing the last window will trigger quit. Since we are storing all UI state
+ 		// before quitting, we need to remember the UI state of this window to be able to persist it.
+ 		// On macOS we keep the last closed window state ready in case the user wants to quit right after or

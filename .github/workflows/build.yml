@@ -66,13 +66,47 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-linux-x64"
 
+      # Separate from the smoke test above because it's a genuinely different
+      # shape of check (see the script's own top-of-file comment): it drives
+      # two real windows through two real close actions, kills the whole app,
+      # relaunches it, and asserts both windows come back — a regression test
+      # for patches/0008, not something the single-launch probe-extension
+      # model above can express. Also now wired into the windows-x64 job
+      # below (see that job's own comment on its equivalent step, and
+      # docs/UPSTREAM_UPGRADES.md's "Extending the 0008 regression check to
+      # Windows CI" section) — not macOS, still unverified there. On this
+      # Linux runner specifically, its CDP-driven close-button-click/keypress
+      # technique has been verified against this runner's xvfb+xdotool setup
+      # (already installed above for capture-screenshot.sh, reused here).
+      # Wrapped in `xvfb-run` around the *whole script* (not inside it, and
+      # not the per-launch wrapping build/smoke-test.sh's own Linux case uses)
+      # because it launches the app three separate times and all three need
+      # to land on the same virtual DISPLAY — the exact same reasoning
+      # build/capture-screenshot.sh's own comment already documents for why
+      # it's invoked the same way.
+      - name: Smoke test (window-state regression, patches/0008)
+        working-directory: hupi-code
+        run: xvfb-run -a ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-linux-x64"
+
       # Non-blocking: this is evidence for Store-listing/marketing use
       # (see capture-screenshot.sh's own comment for exactly why it
       # exists), not a correctness check — smoke-test.sh above is what
       # actually gates the build. A screenshot hiccup shouldn't fail CI.
+      #
+      # timeout-minutes is what actually makes that true. continue-on-error
+      # only suppresses a *reported* step failure — it does nothing for a
+      # step that never reports any conclusion at all. This exact step hung
+      # on windows-x64 twice (58min, then 66min) with no error, just
+      # "in_progress" forever until something force-ended the whole job as
+      # a failure — continue-on-error never got a chance to apply, because
+      # the step itself never finished. A real screenshot capture takes
+      # ~15-20s end to end (see the real run logs this was diagnosed
+      # against); 5 minutes is generous headroom while still failing fast
+      # enough that a hang here can never again take the whole job down.
       - name: Capture a screenshot of the running app
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           xvfb-run -a --server-args="-screen 0 1600x1000x24" \
@@ -234,13 +268,85 @@ jobs:
         working-directory: hupi-code
         run: ./build/smoke-test.sh "${{ github.workspace }}/out/VSCode-win32-x64"
 
+      # Same regression check as the linux-x64 job's own
+      # "Smoke test (window-state regression, patches/0008)" step —
+      # see that step's comment and build/smoke-test-window-state.sh's
+      # own top-of-file comment for the full reasoning. Extended here
+      # after confirming, by reading the real upstream source (not by
+      # assuming), that neither close technique it depends on (a real
+      # Ctrl+Shift+W keypress for the editor, a real DOM click on the
+      # Agents window's close icon) is actually Linux-specific — see
+      # docs/UPSTREAM_UPGRADES.md's "Extending the 0008 regression check
+      # to Windows CI" section for the detailed trace through
+      # CloseWindowAction's keybindings and titlebarPart.ts's window-
+      # controls gating. No xvfb-run wrapper here (none needed or
+      # available on Windows — windows-latest already provides a real
+      # desktop session the same way it already does for the Smoke test
+      # and screenshot steps around this one).
+      #
+      # Blocking. Was briefly flipped to blocking after PR #6's run
+      # 37582039737 passed cleanly, then reverted to continue-on-error
+      # when the very next run on that same commit hit a real, now
+      # root-caused race: rawKeyDown's keybinding-triggered window close
+      # runs synchronously in the same renderer answering the CDP RPC,
+      # so a successful close can tear the connection down before its
+      # own reply arrives — logged as "CDP websocket: connection closed
+      # mid-frame". build/cdp_helper.py now treats a disconnect in that
+      # specific window as a benign signal the close already happened,
+      # not a failure, while still failing hard and fast on a genuine
+      # timeout — the script's own downstream window-absence/relaunch
+      # check is what actually verifies the close took effect either
+      # way, so this doesn't weaken what the step tests. Re-verified
+      # blocking only after 3/3 real windows-latest runs passed, with
+      # the race itself firing live and recovering correctly in at
+      # least 2 of those 3 — not just 3 lucky clean runs. Full account
+      # in docs/UPSTREAM_UPGRADES.md.
+      - name: Smoke test (window-state regression, patches/0008)
+        shell: bash
+        working-directory: hupi-code
+        run: ./build/smoke-test-window-state.sh "${{ github.workspace }}/out/VSCode-win32-x64"
+
+      # Working hypothesis for *why* the step below has hung twice with
+      # zero logged output: its very first action, before anything else
+      # (no app launch yet, no printed progress — `pip install --quiet`
+      # suppresses most of its own output), is `pip install --user mss`,
+      # a network-fetching, file-writing install. The "Exclude workspace
+      # from Windows Defender" step earlier in this job only excludes
+      # `github.workspace` — real-time scanning (already confirmed
+      # elsewhere in this same job as "the single biggest known cause of
+      # Windows CI being much slower... it scans every file
+      # synchronously") is still fully active for wherever `pip --user`
+      # actually writes, which is the user profile, not the workspace.
+      # Not proven (GitHub didn't retain logs for either hung run to
+      # confirm exactly where it stalled), but cheap and safe to
+      # mitigate regardless given it's the same documented mechanism
+      # that already bit `npm ci` in this exact job. Computed instead of
+      # hardcoded, since the real site/cache paths depend on whatever
+      # Python version this runner image actually ships.
+      - name: Exclude Python's user install/cache paths from Windows Defender
+        shell: pwsh
+        run: |
+          $userSite = (python -m site --user-site)
+          $userBase = (python -m site --user-base)
+          Add-MpPreference -ExclusionPath $userBase
+          Add-MpPreference -ExclusionPath $userSite
+          Add-MpPreference -ExclusionPath "$env:LOCALAPPDATA\pip\Cache"
+
       # Non-blocking, same as the Linux job's own screenshot step —
       # evidence for Store-listing/marketing use, not a correctness
       # check (Smoke test above is what actually gates the build).
+      #
+      # timeout-minutes: this exact step on this exact job is the one
+      # that actually hung (twice — runs 37575028215 and 37639244025,
+      # 58min and 66min respectively, no error, just stuck "in_progress"
+      # until the whole job got force-ended as a failure). See the Linux
+      # job's equivalent step for the full reasoning on why
+      # continue-on-error alone doesn't protect against a true hang.
       - name: Capture a screenshot of the running app
         shell: bash
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           ./build/capture-screenshot.sh \
@@ -327,9 +433,17 @@ jobs:
       # correctness check. Runs before signing/notarizing below: it
       # doesn't touch the .app bundle's contents, just launches and
       # screenshots it, so there's no reason to wait.
+      #
+      # timeout-minutes: see the Linux/Windows jobs' equivalent steps —
+      # this exact step hung (with no error) on windows-x64 twice, and
+      # continue-on-error alone doesn't protect against a step that never
+      # reports any conclusion at all. Same bound applied here
+      # preemptively, on the theory that any platform's screenshot step
+      # could in principle hit the same kind of hang.
       - name: Capture a screenshot of the running app
         working-directory: hupi-code
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           mkdir -p "${{ github.workspace }}/out/screenshots"
           ./build/capture-screenshot.sh \

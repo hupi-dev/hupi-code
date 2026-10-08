@@ -28,5 +28,7 @@
   "hupiDisableOnboardingWizard": true,
   "hupiDisableChatSetup": true,
   "hupiDisableNativeChatView": true,
-  "hupiDisableCopilotAccountSignIn": true
+  "hupiDisableCopilotAccountSignIn": true,
+  "hupiDisableDefaultAccountProvider": true,
+  "builtInExtensionsEnabledWithAutoUpdates": []
 }
