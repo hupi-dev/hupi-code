@@ -30,5 +30,7 @@
   "hupiDisableNativeChatView": true,
   "hupiDisableCopilotAccountSignIn": true,
   "hupiDisableDefaultAccountProvider": true,
+  "hupiDisableAgentsWindow": true,
+  "hupiDisableCopilotStatusBarEntry": true,
   "builtInExtensionsEnabledWithAutoUpdates": []
 }
