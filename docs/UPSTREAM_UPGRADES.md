@@ -1858,3 +1858,29 @@ to the machine-wide recents on every run. On an upstream bump, confirm
 `sharedDataFolderName` still exists in the pinned tag's `product.json`
 and `IProductConfiguration` (step 3 above), because the overlay would
 silently stop applying if it were renamed.
+
+## `smoke-test.sh` left the app running after every local Linux run (2026-10-11)
+
+On Linux, `build/smoke-test.sh` launched `xvfb-run -a hupi-code …` in the
+background and recorded `$!`, which is `xvfb-run`'s PID, not the app's.
+At the end it killed that PID. `xvfb-run` exited, but the app and all its
+helper processes kept running on an Xvfb display nobody owned any more.
+CI never noticed, because a GitHub runner is thrown away after the job.
+Locally it piled up: one full HUPI Code instance (about a dozen
+processes, plus the test MCP server since #9) and one Xvfb per run. One
+cleanup found 10 such instances and 45 orphaned displays.
+
+The launch now runs under `setsid`, so `xvfb-run`, Xvfb, the app and its
+helpers share one process group. A new `stop_app` stops the app's main
+process first, so `xvfb-run` cleans up normally (stops Xvfb, removes its
+auth folder). Then it sends SIGTERM to whatever is left in the group, and
+SIGKILL a few seconds later. It also runs from the EXIT trap, so an
+interrupted run cleans up too. Windows and macOS have no wrapper process,
+so they keep the single-PID kill.
+
+Checked locally: after a passing run and after a run stopped with
+SIGTERM partway through startup, no HUPI Code process, Xvfb or
+`xvfb-run` auth folder was left. The same check on the old script left 13
+app processes and one Xvfb. `smoke-test-window-state.sh` and
+`capture-screenshot.sh` didn't have this problem: they're run inside an
+outer `xvfb-run` and kill the app's own PID.

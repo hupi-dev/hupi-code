@@ -280,15 +280,62 @@ module.exports = { activate };
 EOF
 
 cleanup_probe() { rm -rf "$PROBE_DIR" 2>/dev/null || true; }
-# Best-effort cleanup, not a correctness check — `kill "$APP_PID"` below
-# only signals the top-level Electron process, not its whole subprocess
-# tree (renderer/GPU/extension host), so a file under $WORKDIR/user-data
-# can still be open for a moment after. A real run hit exactly this:
-# the actual verification passed, but `rm -rf` on a not-yet-released
-# file made the *cleanup* fail, which — combined with `set -e` — turned
-# a passing smoke test into a false failure. `|| true` here ensures only
-# the actual pass/fail checks below ever set the script's exit code.
-trap 'cleanup_probe; rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
+# Best-effort cleanup, not a correctness check — on Windows/macOS,
+# `stop_app` below only signals the top-level Electron process, not its
+# whole subprocess tree (renderer/GPU/extension host), so a file under
+# $WORKDIR/user-data can still be open for a moment after. A real run
+# hit exactly this: the actual verification passed, but `rm -rf` on a
+# not-yet-released file made the *cleanup* fail, which — combined with
+# `set -e` — turned a passing smoke test into a false failure. `|| true`
+# here ensures only the actual pass/fail checks below ever set the
+# script's exit code.
+trap 'stop_app; cleanup_probe; rm -rf "$WORKDIR" 2>/dev/null || true' EXIT
+
+# Stops the launched app, and on Linux everything that came with it.
+# There, $APP_PID is `xvfb-run`, not the app: killing only that PID left
+# the whole app (every helper process, and the test MCP server) running on
+# an orphaned Xvfb after every local run. The launch below runs in its own
+# session (`setsid`), so xvfb-run, Xvfb, the app and all its helpers share
+# one process group whose ID is $APP_PID.
+#
+# Order matters. The app's main process is stopped first, so xvfb-run sees
+# its command exit and cleans up as usual (stops Xvfb, removes its auth
+# folder). Then anything left in the group (helpers that outlived the main
+# process) gets SIGTERM, a few seconds, then SIGKILL. xvfb-run is this
+# script's own child, so it's reaped with `wait` before the group checks;
+# until then it's a zombie and `kill -0` would keep saying the group exists.
+#
+# Windows and macOS have no wrapper process (and no `setsid`), so they keep
+# the single-PID kill. Safe to call twice: it's also in the EXIT trap, for
+# runs that stop early.
+stop_app() {
+  [[ -n "${APP_PID:-}" ]] || return 0
+  case "$(uname -s)" in
+    Linux*)
+      local app_main
+      app_main="$(pgrep -P "$APP_PID" -x hupi-code || true)"
+      kill -TERM ${app_main:-$APP_PID} 2>/dev/null || true
+      for _ in $(seq 1 10); do
+        case "$(ps -o stat= -p "$APP_PID" 2>/dev/null)" in
+          ""|Z*) break ;;
+        esac
+        sleep 1
+      done
+      wait "$APP_PID" 2>/dev/null || true
+      kill -TERM -- "-$APP_PID" 2>/dev/null || true
+      for _ in $(seq 1 5); do
+        kill -0 -- "-$APP_PID" 2>/dev/null || break
+        sleep 1
+      done
+      kill -KILL -- "-$APP_PID" 2>/dev/null || true
+      ;;
+    *)
+      kill "$APP_PID" 2>/dev/null || true
+      wait "$APP_PID" 2>/dev/null || true
+      ;;
+  esac
+  APP_PID=""
+}
 
 echo "==> launching to confirm it starts and loads the HUPI extension"
 # Linux CI runners have no display at all, hence xvfb; Windows/macOS
@@ -304,7 +351,8 @@ case "$(uname -s)" in
   # without it VS Code shows a modal "OS keyring couldn't be identified"
   # dialog the first time anything touches secret storage — which starting
   # an MCP server does, so the agent-plumbing check would hang.
-  Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}" --password-store=basic) ;;
+  # setsid: see stop_app above.
+  Linux*) LAUNCH=(setsid xvfb-run -a "${LAUNCH[@]}" --password-store=basic) ;;
 esac
 
 "${LAUNCH[@]}" > "$WORKDIR/run.log" 2>&1 &
@@ -325,8 +373,7 @@ for _ in $(seq 1 "$MAX_WAIT_SECS"); do
   fi
   sleep 1
 done
-kill "$APP_PID" 2>/dev/null || true
-wait "$APP_PID" 2>/dev/null || true
+stop_app
 
 if [[ ! -f "$RESULT_FILE" ]]; then
   echo "FAIL: probe never activated — app likely failed to start. Log:"
