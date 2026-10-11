@@ -78,6 +78,32 @@
 # patch from 0009's own investigation; against the real patched build it
 # read back `undefined` in every run.
 #
+# patches/0010 (hupiDisableAgentsWindow) is checked two ways. First, the
+# same command-absence check as 0004/0006, for
+# `workbench.action.openAgentsWindow` and
+# `workbench.action.openWorkspaceInAgentsWindow`. The second one also
+# controls the Welcome page's "Try out the new Agents window" banner
+# (`canShowAgentsBanner` only shows it if that command is registered).
+# Second, the probe adds this run's own Agents workspace
+# (`<user-data>/User/agent-sessions.code-workspace`) to the recents list
+# through the internal `_workbench.addToRecentlyOpened` command, reads the
+# list back with `_workbench.getRecentlyOpened`, and expects the entry
+# to be filtered out. Without 0010 it reads back as "Agents Window",
+# exactly what the Welcome page's Recent list shows. 0010 leaves the
+# `--agents` command-line flag working on purpose:
+# smoke-test-window-state.sh needs it to open a real Agents window.
+#
+# patches/0011 (hupiDisableCopilotStatusBarEntry) skips a contribution
+# that adds a status bar entry and nothing else an extension can see, so
+# 0011 also adds `_hupi.getWorkbenchContributionIds` (same idea as 0007)
+# and the probe checks that `workbench.contrib.chatStatusBarEntry` was
+# never created.
+#
+# The launch uses its own --shared-data-dir: recents live in a
+# machine-wide store (`~/<product.sharedDataFolderName>`, which this build
+# inherits as `.vscode-oss-shared` from upstream), and the 0010 check
+# above writes to it.
+#
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
 
@@ -137,8 +163,12 @@ RESULT_FILE="$WORKDIR/probe-result.txt"
 # with no backslash-escaping to get wrong, and understood natively by
 # Node on Windows.
 RESULT_FILE_FOR_JS="$RESULT_FILE"
+# Same native-path reasoning for the Agents workspace path the 0010 check
+# hands to the app (see the header comment).
+AGENTS_WORKSPACE_FOR_JS="$WORKDIR/user-data/User/agent-sessions.code-workspace"
 if command -v cygpath >/dev/null 2>&1; then
   RESULT_FILE_FOR_JS="$(cygpath -m "$RESULT_FILE")"
+  AGENTS_WORKSPACE_FOR_JS="$(cygpath -m "$AGENTS_WORKSPACE_FOR_JS")"
 fi
 
 # A tiny MCP server for the agent-plumbing check below: one read-only
@@ -185,6 +215,7 @@ EOF
 cat > "$PROBE_DIR/extension.js" <<EOF
 const vscode = require('vscode');
 const fs = require('fs');
+const path = require('path');
 async function activate() {
   const ids = vscode.extensions.all.map(e => e.id).sort();
   const commands = await vscode.commands.getCommands(true);
@@ -193,6 +224,28 @@ async function activate() {
   const nativeChatViewHidden = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden');
   const defaultAccountStatus = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'defaultAccountStatus');
   const mcpEnabled = vscode.workspace.getConfiguration('hupi').get('mcp.enabled');
+  const openAgentsWindowCommand = commands.includes('workbench.action.openAgentsWindow') ? 'present' : 'absent';
+  const openWorkspaceInAgentsWindowCommand = commands.includes('workbench.action.openWorkspaceInAgentsWindow') ? 'present' : 'absent';
+  let agentsWindowRecent = 'error';
+  try {
+    // ensureAgentsWindow (windowsMainService.ts) writes exactly this file
+    // before opening the window; create it the same way so the recents
+    // entry points at a real workspace file.
+    fs.mkdirSync(path.dirname('$AGENTS_WORKSPACE_FOR_JS'), { recursive: true });
+    fs.writeFileSync('$AGENTS_WORKSPACE_FOR_JS', JSON.stringify({ folders: [] }));
+    await vscode.commands.executeCommand('_workbench.addToRecentlyOpened', { uri: vscode.Uri.file('$AGENTS_WORKSPACE_FOR_JS'), type: 'workspace' });
+    const recent = await vscode.commands.executeCommand('_workbench.getRecentlyOpened');
+    agentsWindowRecent = JSON.stringify(recent.workspaces).includes('agent-sessions.code-workspace') ? 'present' : 'absent';
+  } catch (e) {
+    agentsWindowRecent = 'error ' + e;
+  }
+  let copilotStatusBarEntry = 'error';
+  try {
+    const contributionIds = await vscode.commands.executeCommand('_hupi.getWorkbenchContributionIds');
+    copilotStatusBarEntry = contributionIds.includes('workbench.contrib.chatStatusBarEntry') ? 'present' : 'absent';
+  } catch (e) {
+    copilotStatusBarEntry = 'error ' + e;
+  }
   const agentEnabled = vscode.workspace.getConfiguration('hupi').get('agent.enabled');
   // The HUPI agent's plumbing: start the configured MCP servers the way
   // the agent does (nothing else starts them here — there's no native chat
@@ -216,7 +269,7 @@ async function activate() {
       mcpCall = 'error ' + e;
     }
   }
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus + '\n' + 'mcpEnabled:' + mcpEnabled + '\n' + 'agentEnabled:' + agentEnabled + '\n' + 'mcpTool:' + mcpTool + '\n' + 'mcpCall:' + mcpCall);
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus + '\n' + 'mcpEnabled:' + mcpEnabled + '\n' + 'openAgentsWindowCommand:' + openAgentsWindowCommand + '\n' + 'openWorkspaceInAgentsWindowCommand:' + openWorkspaceInAgentsWindowCommand + '\n' + 'agentsWindowRecent:' + agentsWindowRecent + '\n' + 'copilotStatusBarEntry:' + copilotStatusBarEntry + '\n' + 'agentEnabled:' + agentEnabled + '\n' + 'mcpTool:' + mcpTool + '\n' + 'mcpCall:' + mcpCall);
 }
 module.exports = { activate };
 EOF
@@ -240,7 +293,7 @@ echo "==> launching to confirm it starts and loads the HUPI extension"
 # runs the whole app and waits for onStartupFinished, so something has to
 # kill it afterward regardless of OS — a portable background+sleep+kill
 # replaces `timeout` for that.
-LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$WORKDIR/user-data")
+LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$WORKDIR/user-data" --shared-data-dir="$WORKDIR/shared-data")
 case "$(uname -s)" in
   # --password-store=basic: a headless Linux runner has no OS keyring, and
   # without it VS Code shows a modal "OS keyring couldn't be identified"
@@ -340,6 +393,32 @@ if grep -qx "agentEnabled:false" "$RESULT_FILE"; then
   exit 1
 fi
 
+if ! grep -qx "openAgentsWindowCommand:absent" "$RESULT_FILE" || ! grep -qx "openWorkspaceInAgentsWindowCommand:absent" "$RESULT_FILE"; then
+  echo "FAIL: an Agents window command is registered — patches/0010's"
+  echo "hupiDisableAgentsWindow gate did not take; the Welcome page will show"
+  echo "\"Try out the new Agents window\", which opens a window that never gets"
+  echo "past its loading screen. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
+if ! grep -qx "agentsWindowRecent:absent" "$RESULT_FILE"; then
+  echo "FAIL: the Agents workspace is still listed in recents (or the check"
+  echo "errored) — patches/0010's recents filter did not take; the Welcome page"
+  echo "and File > Open Recent will offer \"Agents Window\". Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
+if ! grep -qx "copilotStatusBarEntry:absent" "$RESULT_FILE"; then
+  echo "FAIL: workbench.contrib.chatStatusBarEntry was created (or the check"
+  echo "errored) — patches/0011's hupiDisableCopilotStatusBarEntry gate did not"
+  echo "take; the status bar will show a \"Copilot status\" icon whose only"
+  echo "action is a setup command that doesn't exist here. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 if ! grep -qx "mcpTool:listed" "$RESULT_FILE" || ! grep -qx "mcpCall:ok" "$RESULT_FILE"; then
   echo "FAIL: the HUPI agent's tool plumbing doesn't work: starting MCP servers"
   echo "(workbench.mcp.startServer) and finding/calling their tools through"
@@ -354,4 +433,6 @@ echo "upstream's Copilot Chat Setup is confirmed disabled, the native Chat view"
 echo "is confirmed force-hidden, the Account Menu's Copilot sign-in command is"
 echo "confirmed absent, the default-account/Copilot-entitlement provider is"
 echo "confirmed never registered, HUPI's MCP server is off by default, the HUPI"
-echo "agent is on, and an MCP server's tool can be started, listed and called."
+echo "agent is on, an MCP server's tool can be started, listed and called, the"
+echo "Agents window's entry points and Recent entry are confirmed gone, and the"
+echo "Copilot status bar entry is confirmed never created."

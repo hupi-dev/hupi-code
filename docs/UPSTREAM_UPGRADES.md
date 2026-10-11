@@ -1679,3 +1679,131 @@ hang inside the script could not be directly confirmed either time.
    capture output before a hang (e.g. flushing progress lines to a file
    polled from outside the step, since GitHub's own log retention has
    now failed to preserve evidence twice) rather than guessing again.
+
+## 0010 and 0011 — the Agents window and the Copilot status entry (2026-10-11)
+
+Found by looking at the Welcome page of a local `1.137.0` build with
+0001-0009 applied. It still showed three Copilot surfaces that none of
+the earlier patches touch: a "Try out the new Agents window" button, an
+"Agents Window" entry under Recent, and a Copilot icon at the bottom
+right of the status bar. Each was clicked in a real build (headless
+Xvfb, driven over `--remote-debugging-port`, screenshots taken with
+`mss`), and none of them has a `product.json` switch.
+
+**What they did before the patches.**
+
+- *"Try out the new Agents window"* opens a second, separate window
+  (`out/vs/sessions/electron-browser/sessions.html`, titled "Agents").
+  It never got past its loading screen (the agent logo on an empty
+  background, still there after 45 seconds). The DOM behind it had
+  rendered ("Sessions / New / Automations / Chats / Customizations /
+  Pitch your idea / Models"), but the overlay stays.
+  `SessionsSetUpService._showWelcome` (`src/vs/sessions/browser/sessionsSetUpService.ts`)
+  shows that overlay on first launch and removes it only after
+  `await defaultAccountService.getDefaultAccount()` returns.
+  `DefaultAccountService.getDefaultAccount()` (`defaultAccount.ts`)
+  first waits on `initBarrier`, and the only thing that opens that
+  barrier is `setDefaultAccountProvider`, which 0009 skips on purpose.
+  So in this build the call never returns. Without 0009 it would return
+  `null` (no GitHub session) and the window would show its
+  "Sign in to use GitHub Copilot" dialog instead. No install attempt
+  and no network call with a token were seen. The window's agent host
+  only logged "No signed-in session resolved for resource:
+  https://api.github.com".
+- *"Agents Window" under Recent* comes from
+  `WorkspacesHistoryMainService.canonicalizeAgentSessionsWorkspaces`
+  (`src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts`).
+  It relabels any recents entry for an `agent-sessions.code-workspace`
+  file as "Agents Window". The entry only exists once that window has
+  been opened, but the recents list is machine-wide, not per profile:
+  it's stored in `~/<sharedDataFolderName>/sharedStorage`, and this
+  build inherits upstream's `sharedDataFolderName`,
+  `.vscode-oss-shared`. On the machine where this was found it showed
+  up in a brand-new `--user-data-dir`, alongside smoke-test folders
+  from earlier runs. Opening it opens the same stuck window.
+- *The status bar icon* is `chat.statusBarEntry` (aria-label "Copilot
+  status", `codicon-copilot`), added by `ChatStatusBarEntry`
+  (`src/vs/workbench/contrib/chat/browser/chatStatus/chatStatusEntry.ts`).
+  Clicking it shows "Inline Suggestions: Disabled" and "Set up Copilot
+  to use AI features" with a "Use AI Features" button. That button runs
+  `workbench.action.chat.triggerSetup`, which 0004 never registers, so
+  nothing visible happens and the renderer log gets `command
+  'workbench.action.chat.triggerSetup' not found`. The Inline
+  Suggestions toggles write `product.defaultChatAgent.completionsEnablementSetting`
+  (`github.copilot.enable`), which HUPI's own inline completions don't
+  read.
+
+**Why not a setting or `product.json`.** All three are gated on
+`chatEntitlementService.sentiment.hidden` / the `chatSetupHidden`
+context key. The only things that set it are `chat.disableAIFeatures`
+and the shared `setForceHidden` flag that 0005's entry explains can't
+be reused. `chat.disableAIFeatures` hides all chat UI, including what
+HUPI's own `@hupi` chat participant uses. `IProductConfiguration` has
+nothing for the Agents window: `sessionsWindowAllowedExtensions` only
+lists which extensions may run inside it.
+
+**`patches/0010-disable-agents-window-entry-points.patch`** adds
+`hupiDisableAgentsWindow` (set in `product-overlay.json`) and, when
+it's set:
+
+- skips the six Agents window `registerAction2` calls and the two
+  contributions (`OpenWorkspaceInAgentsContribution`,
+  `AgentsHandoffInputTipContribution`) in
+  `src/vs/workbench/contrib/chat/electron-browser/chat.contribution.ts`.
+  This removes "Open Agents Window", "Open in Agents", Ctrl+Shift+A,
+  the chat and title bar buttons, and the chat handoff tip. It also
+  removes the Welcome page button, on both the classic and the Agent
+  Sessions Welcome page: `canShowAgentsBanner`
+  (`agentSessionsBanner.ts`) only shows it when
+  `workbench.action.openWorkspaceInAgentsWindow` is registered.
+- sets the `tip.agentsWindow` chat tip's `when` to `false`
+  (`chatTipCatalog.ts`). It links to a command that now doesn't exist.
+- leaves Agents workspace entries out of `getRecentlyOpened()`. That
+  covers the Welcome page's Recent list, File > Open Recent, and the
+  Windows jump list, including entries written before this patch or by
+  another Code-OSS app that shares `.vscode-oss-shared`.
+
+Left alone on purpose: `src/vs/sessions/` itself, one
+accessibility-help sentence that mentions the command, and the
+`--agents` command-line flag. A first version of 0010 also made
+`--agents` open a normal window instead. CI's linux-x64 job then failed
+in `build/smoke-test-window-state.sh`, 0008's regression test. That
+test opens a real Agents window with `--agents`, closes both windows,
+relaunches, and expects both back. It timed out waiting for
+`sessions.html`. The flag isn't a Welcome-page surface, and an Agents
+window can still come back through window restore (exactly what 0008
+fixes), so the flag stays and 0008's test keeps covering that path.
+
+**`patches/0011-hide-copilot-status-bar-entry.patch`** adds
+`hupiDisableCopilotStatusBarEntry` and skips registering
+`ChatStatusBarEntry` (`chat.shared.contribution.ts`). Nothing else
+looks the contribution up by ID, and nothing else in the status bar is
+positioned relative to `chat.statusBarEntry`. That contribution adds
+no command or context key, so the smoke test had nothing to check. The
+patch therefore also adds `_hupi.getWorkbenchContributionIds`, a
+read-only diagnostic command like 0007's. It returns the IDs in the
+contributions registry's own `timings` map, which gets every
+contribution created so far.
+
+**Checks in `build/smoke-test.sh`.** The probe now also checks that
+`workbench.action.openAgentsWindow` and
+`workbench.action.openWorkspaceInAgentsWindow` are not registered. It
+adds the run's own `agent-sessions.code-workspace` to recents with
+`_workbench.addToRecentlyOpened`, reads the list back with
+`_workbench.getRecentlyOpened`, and expects that entry to be gone. It
+also checks that `workbench.contrib.chatStatusBarEntry` isn't in
+`_hupi.getWorkbenchContributionIds`. The launch now passes
+`--shared-data-dir` so that seeding recents doesn't write to the
+machine-wide `.vscode-oss-shared` store. Against the unpatched build
+(0001-0009 only), the five existing checks still passed and the new
+ones read back `openAgentsWindowCommand:present`,
+`openWorkspaceInAgentsWindowCommand:present`, `agentsWindowRecent:present`
+and `copilotStatusBarEntry:error … command
+'_hupi.getWorkbenchContributionIds' not found`. So each new check can
+fail.
+
+**On the next upstream bump**, re-check that `canShowAgentsBanner`
+still depends on the command being registered. Also grep for new
+callers of `INativeHostService.openAgentsWindow` /
+`IWindowsMainService.openAgentsWindow`, and for anything else that adds
+a status bar entry with `codicon-copilot`.

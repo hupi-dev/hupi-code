@@ -1,0 +1,123 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index e1412c23..a84d1720 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -276,6 +276,7 @@ export interface IProductConfiguration {
+ 	readonly hupiDisableNativeChatView?: boolean;
+ 	readonly hupiDisableCopilotAccountSignIn?: boolean;
+ 	readonly hupiDisableDefaultAccountProvider?: boolean;
++	readonly hupiDisableAgentsWindow?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts b/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts
+index 70356b90..28f7ab3e 100644
+--- a/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts
++++ b/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts
+@@ -15,6 +15,7 @@ import { basename, dirname, extUriBiasedIgnorePathCase, isEqual, originalFSPath
+ import { URI } from '../../../base/common/uri.js';
+ import { Promises } from '../../../base/node/pfs.js';
+ import { localize } from '../../../nls.js';
++import product from '../../product/common/product.js';
+ import { createDecorator } from '../../instantiation/common/instantiation.js';
+ import { ILifecycleMainService, LifecycleMainPhase } from '../../lifecycle/electron-main/lifecycleMainService.js';
+ import { ILogService } from '../../log/common/log.js';
+@@ -210,6 +211,15 @@ export class WorkspacesHistoryMainService extends Disposable implements IWorkspa
+ 
+ 		for (const recent of workspaces) {
+ 			if (isRecentWorkspace(recent) && this.isAgentSessionsWorkspace(recent.workspace)) {
++				// HUPI Code patch: patches/0010 removes every in-app way into the
++				// Agents window, but an "Agents Window" entry can still be in
++				// the recents store from before that, or from another
++				// Code-OSS-based app that shares the same `sharedDataFolderName`
++				// store. Opening it would show the same window that never
++				// finishes loading, so leave it out of the list.
++				if (product.hupiDisableAgentsWindow) {
++					continue;
++				}
+ 				if (!agentsWindowAdded) {
+ 					agentsWindowAdded = true;
+ 					result.push({
+diff --git a/src/vs/workbench/contrib/chat/browser/chatTipCatalog.ts b/src/vs/workbench/contrib/chat/browser/chatTipCatalog.ts
+index 7cc8d7bd..c4037190 100644
+--- a/src/vs/workbench/contrib/chat/browser/chatTipCatalog.ts
++++ b/src/vs/workbench/contrib/chat/browser/chatTipCatalog.ts
+@@ -9,6 +9,7 @@ import { ContextKeyExpr, ContextKeyExpression } from '../../../../platform/conte
+ import { IsWebContext } from '../../../../platform/contextkey/common/contextkeys.js';
+ import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+ import { MenuRegistry } from '../../../../platform/actions/common/actions.js';
++import product from '../../../../platform/product/common/product.js';
+ import { ChatConfiguration, ChatModeKind, OPEN_AGENTS_WINDOW_COMMAND_ID, OPEN_AGENTS_WINDOW_PRECONDITION, OPEN_WORKSPACE_IN_AGENTS_WINDOW_COMMAND_ID } from '../common/constants.js';
+ import { ChatContextKeys } from '../common/actions/chatContextKeys.js';
+ import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
+@@ -434,7 +435,9 @@ export const TIP_CATALOG: readonly ITipDefinition[] = [
+ 				: defaultMessage;
+ 			return new MarkdownString(message);
+ 		},
+-		when: ContextKeyExpr.and(IsWebContext.negate(), OPEN_AGENTS_WINDOW_PRECONDITION),
++		// HUPI Code patch: patches/0010 never registers the command this tip
++		// links to (see electron-browser/chat.contribution.ts), so never show it.
++		when: product.hupiDisableAgentsWindow ? ContextKeyExpr.false() : ContextKeyExpr.and(IsWebContext.negate(), OPEN_AGENTS_WINDOW_PRECONDITION),
+ 		excludeWhenCommandsExecuted: [
+ 			OPEN_AGENTS_WINDOW_COMMAND_ID,
+ 			OPEN_WORKSPACE_IN_AGENTS_WINDOW_COMMAND_ID,
+diff --git a/src/vs/workbench/contrib/chat/electron-browser/chat.contribution.ts b/src/vs/workbench/contrib/chat/electron-browser/chat.contribution.ts
+index 65d3cb47..1067b550 100644
+--- a/src/vs/workbench/contrib/chat/electron-browser/chat.contribution.ts
++++ b/src/vs/workbench/contrib/chat/electron-browser/chat.contribution.ts
+@@ -22,6 +22,7 @@ import { IInstantiationService, ServicesAccessor } from '../../../../platform/in
+ import { registerSharedProcessRemoteService } from '../../../../platform/ipc/electron-browser/services.js';
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { INativeHostService } from '../../../../platform/native/common/native.js';
++import product from '../../../../platform/product/common/product.js';
+ import { IWorkspaceTrustRequestService } from '../../../../platform/workspace/common/workspaceTrust.js';
+ import { WorkbenchPhase, registerWorkbenchContribution2 } from '../../../common/contributions.js';
+ import { ViewContainerLocation } from '../../../common/views.js';
+@@ -211,12 +212,28 @@ class ChatLifecycleHandler extends Disposable {
+ 	}
+ }
+ 
+-registerAction2(OpenWorkspaceInAgentsWindowAction);
+-registerAction2(OpenWorkspaceInAgentsWindowChatTitleAction);
+-registerAction2(OpenWorkspaceInAgentsWindowTitleBarAction);
+-registerAction2(ToggleOpenInAgentsWindowTitleBarAction);
+-registerAction2(OpenAgentsWindowAction);
+-registerAction2(OpenChatSessionInAgentsWindowAction);
++// HUPI Code patch: every in-app way into the Agents window (the
++// separate `vs/sessions` window, a Copilot-first surface) is registered
++// here — the command palette's "Open Agents Window" / "Open in Agents",
++// Ctrl+Shift+A, the chat and title bar "Open in Agents" buttons, and,
++// indirectly, the Welcome page's "Try out the new Agents window" banner
++// (`canShowAgentsBanner` only shows it if
++// OPEN_WORKSPACE_IN_AGENTS_WINDOW_COMMAND_ID is registered). In a HUPI
++// Code build that window can never get past its own first-launch
++// loading overlay: `SessionsSetUpService` awaits
++// `IDefaultAccountService.getDefaultAccount()`, which waits on a barrier
++// only `setDefaultAccountProvider` opens — and patches/0009 skips that
++// on purpose. Without 0009 it would instead stop at a "Sign in to use
++// GitHub Copilot" dialog. Neither is something a HUPI-native IDE should
++// advertise, so none of these entry points are registered.
++if (!product.hupiDisableAgentsWindow) {
++	registerAction2(OpenWorkspaceInAgentsWindowAction);
++	registerAction2(OpenWorkspaceInAgentsWindowChatTitleAction);
++	registerAction2(OpenWorkspaceInAgentsWindowTitleBarAction);
++	registerAction2(ToggleOpenInAgentsWindowTitleBarAction);
++	registerAction2(OpenAgentsWindowAction);
++	registerAction2(OpenChatSessionInAgentsWindowAction);
++}
+ registerAction2(StartVoiceChatAction);
+ 
+ registerAction2(VoiceChatInChatViewAction);
+@@ -241,8 +258,10 @@ registerWorkbenchContribution2(NativeBuiltinToolsContribution.ID, NativeBuiltinT
+ registerWorkbenchContribution2(ChatCommandLineHandler.ID, ChatCommandLineHandler, WorkbenchPhase.BlockRestore);
+ registerWorkbenchContribution2(ChatSuspendThrottlingHandler.ID, ChatSuspendThrottlingHandler, WorkbenchPhase.AfterRestored);
+ registerWorkbenchContribution2(ChatLifecycleHandler.ID, ChatLifecycleHandler, WorkbenchPhase.AfterRestored);
+-registerWorkbenchContribution2(OpenWorkspaceInAgentsContribution.ID, OpenWorkspaceInAgentsContribution, WorkbenchPhase.BlockRestore);
+-registerWorkbenchContribution2(AgentsHandoffInputTipContribution.ID, AgentsHandoffInputTipContribution, WorkbenchPhase.Eventually);
++if (!product.hupiDisableAgentsWindow) {
++	registerWorkbenchContribution2(OpenWorkspaceInAgentsContribution.ID, OpenWorkspaceInAgentsContribution, WorkbenchPhase.BlockRestore);
++	registerWorkbenchContribution2(AgentsHandoffInputTipContribution.ID, AgentsHandoffInputTipContribution, WorkbenchPhase.Eventually);
++}
+ 
+ // How long to wait for the agent host to surface an AgentInfo before
+ // throwing an error. Long enough for normal startup, short enough to avoid

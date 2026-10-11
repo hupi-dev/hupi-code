@@ -90,6 +90,24 @@ chat UI, inline ghost-text completions, custom diff panels) is
 reachable that way, without touching upstream source, and that's still
 the preferred direction before reaching for another core patch.
 
+`patches/0010-*.patch` and `patches/0011-*.patch` remove two Copilot
+surfaces that are new in VS Code 1.137. Both were found on the Welcome
+page of a local build. 0010 (`hupiDisableAgentsWindow`) removes the
+entry points to the new Agents window: the "Try out the new Agents
+window" button, the "Agents Window" entry under Recent, the "Open
+Agents Window" / "Open in Agents" commands and Ctrl+Shift+A, and the
+chat tip. `hupi-code --agents` still opens it, because
+`build/smoke-test-window-state.sh` (0008's regression test) depends on
+it. In this build that window
+never gets past its loading screen, because it waits for the
+default-account provider that 0009 turns off. Without 0009 it would
+stop at a "Sign in to use GitHub Copilot" dialog instead. 0011
+(`hupiDisableCopilotStatusBarEntry`) removes the "Copilot status" icon
+at the bottom right of the status bar. Its only action is a "Use AI
+Features" button that runs the setup command 0004 removes. Both are
+checked by `build/smoke-test.sh`. See docs/UPSTREAM_UPGRADES.md for the
+details.
+
 **Not done, deliberately deferred**: stripping the generic Microsoft
 account-sign-in prompt (the same person-icon in the Activity Bar also
 nags you to sign in for Settings Sync, a separate, non-Copilot entry in

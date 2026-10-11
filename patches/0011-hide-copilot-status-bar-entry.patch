@@ -1,0 +1,66 @@
+diff --git a/src/vs/base/common/product.ts b/src/vs/base/common/product.ts
+index a84d1720..e9c9a221 100644
+--- a/src/vs/base/common/product.ts
++++ b/src/vs/base/common/product.ts
+@@ -277,6 +277,7 @@ export interface IProductConfiguration {
+ 	readonly hupiDisableCopilotAccountSignIn?: boolean;
+ 	readonly hupiDisableDefaultAccountProvider?: boolean;
+ 	readonly hupiDisableAgentsWindow?: boolean;
++	readonly hupiDisableCopilotStatusBarEntry?: boolean;
+ 	readonly chatParticipantRegistry?: string;
+ 	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
+ 	readonly emergencyAlertUrl?: string;
+diff --git a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+index 887346b3..a726d750 100644
+--- a/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
++++ b/src/vs/workbench/contrib/chat/browser/chat.shared.contribution.ts
+@@ -45,7 +45,7 @@ import { AgentSandboxEnabledValue, AgentSandboxSettingId } from '../../../../pla
+ import { ITelemetryService } from '../../../../platform/telemetry/common/telemetry.js';
+ import { EditorPaneDescriptor, IEditorPaneRegistry } from '../../../browser/editor.js';
+ import { type ConfigurationKeyValuePairs, Extensions, IConfigurationMigrationRegistry } from '../../../common/configuration.js';
+-import { IWorkbenchContribution, WorkbenchPhase, registerWorkbenchContribution2 } from '../../../common/contributions.js';
++import { IWorkbenchContribution, IWorkbenchContributionsRegistry, WorkbenchPhase, Extensions as WorkbenchExtensions, registerWorkbenchContribution2 } from '../../../common/contributions.js';
+ import { EditorExtensions, IEditorFactoryRegistry } from '../../../common/editor.js';
+ import { IWorkbenchAssignmentService } from '../../../services/assignment/common/assignmentService.js';
+ import { ChatEntitlement, IChatEntitlementService } from '../../../services/chat/common/chatEntitlementService.js';
+@@ -3270,7 +3270,18 @@ registerWorkbenchContribution2(ChatPromoNotificationContribution.ID, ChatPromoNo
+ registerWorkbenchContribution2(ChatExpNotificationContribution.ID, ChatExpNotificationContribution, WorkbenchPhase.AfterRestored);
+ registerWorkbenchContribution2(HasByokModelsContribution.ID, HasByokModelsContribution, WorkbenchPhase.BlockRestore);
+ registerWorkbenchContribution2(ChatTeardownContribution.ID, ChatTeardownContribution, WorkbenchPhase.AfterRestored);
+-registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);
++// HUPI Code patch: the status bar's "Copilot status" entry (codicon-copilot,
++// bottom right) is Copilot-only in a HUPI Code build. Its popup offers
++// "Set up Copilot to use AI features" with a "Use AI Features" button that
++// runs workbench.action.chat.triggerSetup, a command patches/0004 never
++// registers (clicking it only logs "command not found"). Its Inline
++// Suggestions toggles write product.defaultChatAgent.completionsEnablementSetting
++// (`github.copilot.enable`), which HUPI's own inline completions don't
++// read. Same reasoning as 0004/0006: don't show a Copilot control that
++// does nothing.
++if (!product.hupiDisableCopilotStatusBarEntry) {
++	registerWorkbenchContribution2(ChatStatusBarEntry.ID, ChatStatusBarEntry, WorkbenchPhase.BlockRestore);
++}
+ registerWorkbenchContribution2(BuiltinToolsContribution.ID, BuiltinToolsContribution, WorkbenchPhase.Eventually);
+ registerWorkbenchContribution2(ClientToolSetsContribution.ID, ClientToolSetsContribution, WorkbenchPhase.Eventually);
+ registerWorkbenchContribution2(UsagesToolContribution.ID, UsagesToolContribution, WorkbenchPhase.BlockRestore);
+@@ -3417,3 +3428,20 @@ ChatWidget.CONTRIBS.push(ChatDynamicVariableModel);
+ CommandsRegistry.registerCommand('_hupi.getContextKeyValue', (accessor: ServicesAccessor, key: string) => {
+ 	return accessor.get(IContextKeyService).getContextKeyValue(key);
+ });
++
++// HUPI Code patch: diagnostic-only command for build/smoke-test.sh, same
++// idea as `_hupi.getContextKeyValue` above (patches/0007). The status bar
++// entry this patch removes has no command or context key an extension
++// could check, so the probe asks for the IDs of every workbench
++// contribution created so far (the registry's own `timings`, the data
++// behind "Developer: Startup Performance") and checks that
++// `workbench.contrib.chatStatusBarEntry` isn't among them.
++CommandsRegistry.registerCommand('_hupi.getWorkbenchContributionIds', () => {
++	const ids: string[] = [];
++	for (const timings of Registry.as<IWorkbenchContributionsRegistry>(WorkbenchExtensions.Workbench).timings.values()) {
++		for (const [id] of timings) {
++			ids.push(id);
++		}
++	}
++	return ids;
++});
