@@ -1807,3 +1807,54 @@ still depends on the command being registered. Also grep for new
 callers of `INativeHostService.openAgentsWindow` /
 `IWindowsMainService.openAgentsWindow`, and for anything else that adds
 a status bar entry with `codicon-copilot`.
+
+## HUPI Code's own `sharedDataFolderName` (2026-10-11)
+
+`product-overlay.json` now sets `"sharedDataFolderName":
+".hupi-code-shared"`. Before this, the build inherited upstream's
+`.vscode-oss-shared`, the same value VSCodium and a self-built Code-OSS
+use.
+
+**What lives there.** `environmentService.appSharedDataHome` is
+`~/<sharedDataFolderName>` (unless `--shared-data-dir` or
+`VSCODE_PORTABLE` overrides it). `StorageMainService.createApplicationSharedStorage`
+keeps the `APPLICATION_SHARED` storage scope in
+`<that folder>/sharedStorage/state.vscdb`. In `1.137.0` that scope holds:
+
+- the recently opened list (`history.recentlyOpenedPathsList`,
+  `workspacesHistoryMainService.ts`), shown on the Welcome page and in
+  File > Open Recent;
+- the trusted-folders list (`workspaceTrust.ts`);
+- on Windows only, the `vscode.github-authentication` secret
+  (`CROSS_APP_SHARED_SECRET_KEYS` in `secrets.ts`), which upstream shares
+  on purpose so its Agents app can reuse the sign-in;
+- chat pet achievements, and global-state sync data for this scope.
+
+Under the old name, all of this was shared with any other Code-OSS-based
+app on the machine. Trusting a folder in VSCodium trusted it in HUPI
+Code, and recents from either app showed up in both. This is how an
+"Agents Window" entry and smoke-test folders appeared in a brand-new
+HUPI Code profile while investigating 0010.
+
+**What happens on upgrade.** The new folder starts empty.
+`ApplicationSharedStorageMain` falls back to the profile's own
+application storage (`<user-data>/User/globalStorage/state.vscdb`) for
+keys it doesn't have yet, so anything a profile stored there from before
+the shared scope existed still carries over. Nothing written to
+`~/.vscode-oss-shared` does. For an existing HUPI Code user that means a
+one-time reset of the Recent list and of trusted folders (they'll be
+asked to trust folders again), and on Windows a GitHub sign-in that has
+to be redone. The old folder is left as it is, since other apps may
+still use it. This was judged acceptable rather than worth a core patch
+to copy the old store: most of its contents may not be HUPI Code's
+anyway.
+
+**Checks.** `build/smoke-test.sh` reads the shipped `product.json` and
+fails unless `sharedDataFolderName` is `.hupi-code-shared`. All three
+launch scripts (`smoke-test.sh`, `smoke-test-window-state.sh`,
+`capture-screenshot.sh`) now pass `--shared-data-dir` inside their temp
+dir. Before, `smoke-test-window-state.sh` added its `testproject` folder
+to the machine-wide recents on every run. On an upstream bump, confirm
+`sharedDataFolderName` still exists in the pinned tag's `product.json`
+and `IProductConfiguration` (step 3 above), because the overlay would
+silently stop applying if it were renamed.

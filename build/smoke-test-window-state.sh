@@ -198,6 +198,10 @@ esac
 
 WORKDIR="$(mktemp -d)"
 USER_DATA_DIR="$WORKDIR/user-data"
+# Kept out of the real ~/<product.sharedDataFolderName> store: that's where
+# recents live, and opening $TESTPROJECT_DIR adds it there. Passed on every
+# launch below so the relaunch sees the same store.
+SHARED_DATA_DIR="$WORKDIR/shared-data"
 TESTPROJECT_DIR="$WORKDIR/testproject"
 
 cleanup() {
@@ -249,7 +253,8 @@ wait_for_devtools_port() {
 
 echo "==> launching the editor window"
 "$APP_BIN" --no-sandbox --disable-gpu --disable-workspace-trust --new-window \
-  --user-data-dir="$USER_DATA_DIR" --remote-debugging-port=0 --remote-allow-origins='*' \
+  --user-data-dir="$USER_DATA_DIR" --shared-data-dir="$SHARED_DATA_DIR" \
+  --remote-debugging-port=0 --remote-allow-origins='*' \
   "$TESTPROJECT_DIR" > "$WORKDIR/instance1.log" 2>&1 &
 APP_PID=$!
 
@@ -267,7 +272,7 @@ echo "==> opening the Agents window via --agents against the same --user-data-di
 # terminal while the app is already open) — this second invocation's own
 # process just forwards the request and exits; the actual new window
 # opens inside the first process, and so shows up on *its* debug port.
-"$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$USER_DATA_DIR" --agents \
+"$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$USER_DATA_DIR" --shared-data-dir="$SHARED_DATA_DIR" --agents \
   >> "$WORKDIR/instance1.log" 2>&1
 
 AGENTS_WS="$("$PYTHON" "$CDP_HELPER" wait "$PORT" sessions.html 60)" || {
@@ -353,7 +358,7 @@ fi
 APP_PID=""
 
 echo "==> relaunching against the same --user-data-dir with no CLI arguments"
-"$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$USER_DATA_DIR" \
+"$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$USER_DATA_DIR" --shared-data-dir="$SHARED_DATA_DIR" \
   --remote-debugging-port=0 --remote-allow-origins='*' \
   > "$WORKDIR/relaunch.log" 2>&1 &
 RELAUNCH_PID=$!

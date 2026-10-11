@@ -3,6 +3,7 @@
   "nameLong": "HUPI Code",
   "applicationName": "hupi-code",
   "dataFolderName": ".hupi-code",
+  "sharedDataFolderName": ".hupi-code-shared",
   "win32MutexName": "hupicode",
   "win32DirName": "HUPI Code",
   "win32NameVersion": "HUPI Code",

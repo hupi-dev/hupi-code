@@ -135,6 +135,16 @@ server, starts it with `workbench.mcp.startServer` the way the agent does,
 and finds and calls its tool through `vscode.lm.tools` /
 `vscode.lm.invokeTool`.
 
+`product-overlay.json` also gives HUPI Code its own shared-data folder,
+`~/.hupi-code-shared`, instead of upstream's `~/.vscode-oss-shared`.
+That folder holds data that every profile of the app shares: the
+recently opened list, the list of trusted folders, and on Windows the
+stored GitHub sign-in. Under upstream's name, all of that was shared with
+VSCodium and any other Code-OSS build on the same machine. The build and
+test scripts pass `--shared-data-dir` so their launches don't write to
+the real folder. See docs/UPSTREAM_UPGRADES.md for what this resets on
+upgrade.
+
 Linux, Windows, and macOS (arm64) all build in CI now — see
 [docs/BUILD.md](docs/BUILD.md). The macOS build is now code-signed and
 notarized with a real Apple Developer ID in CI (see the Phase 4 note

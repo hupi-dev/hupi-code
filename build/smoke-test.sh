@@ -100,9 +100,14 @@
 # never created.
 #
 # The launch uses its own --shared-data-dir: recents live in a
-# machine-wide store (`~/<product.sharedDataFolderName>`, which this build
-# inherits as `.vscode-oss-shared` from upstream), and the 0010 check
-# above writes to it.
+# machine-wide store (`~/<product.sharedDataFolderName>`), and the 0010
+# check above writes to it.
+#
+# That store's folder name is checked too. product-overlay.json sets it to
+# `.hupi-code-shared`; upstream's default, `.vscode-oss-shared`, is shared
+# with every other Code-OSS build on the machine (recents, trusted folders,
+# and on Windows the GitHub sign-in). The launch overrides the folder, so
+# this check reads the shipped product.json instead.
 #
 # Usage: ./build/smoke-test.sh /path/to/VSCode-<platform>-<arch>
 set -euo pipefail
@@ -329,6 +334,14 @@ if [[ ! -f "$RESULT_FILE" ]]; then
   exit 1
 fi
 
+SHARED_DATA_FOLDER="$(sed -n 's/^[[:space:]]*"sharedDataFolderName": "\(.*\)",*$/\1/p' "$RESOURCES_DIR/product.json")"
+if [[ "$SHARED_DATA_FOLDER" != ".hupi-code-shared" ]]; then
+  echo "FAIL: product.json's sharedDataFolderName is '$SHARED_DATA_FOLDER', not"
+  echo "'.hupi-code-shared' — product-overlay.json's override didn't take, so HUPI"
+  echo "Code shares recents and trusted folders with other Code-OSS builds."
+  exit 1
+fi
+
 if ! grep -qx "hupi.hupi-vscode" "$RESULT_FILE"; then
   echo "FAIL: hupi.hupi-vscode not found among loaded extensions:"
   cat "$RESULT_FILE"
@@ -434,5 +447,6 @@ echo "is confirmed force-hidden, the Account Menu's Copilot sign-in command is"
 echo "confirmed absent, the default-account/Copilot-entitlement provider is"
 echo "confirmed never registered, HUPI's MCP server is off by default, the HUPI"
 echo "agent is on, an MCP server's tool can be started, listed and called, the"
-echo "Agents window's entry points and Recent entry are confirmed gone, and the"
-echo "Copilot status bar entry is confirmed never created."
+echo "Agents window's entry points and Recent entry are confirmed gone, the"
+echo "Copilot status bar entry is confirmed never created, and shared data uses"
+echo "HUPI Code's own folder."
