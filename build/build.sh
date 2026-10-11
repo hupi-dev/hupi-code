@@ -207,6 +207,11 @@ pkg.pop("devDependencies", None)
 props = pkg.get("contributes", {}).get("configuration", {}).get("properties", {})
 if "hupi.mcp.enabled" in props:
     props["hupi.mcp.enabled"]["default"] = False
+# HUPI's agent (extension 0.1.16+) is this build's only agent, since
+# Copilot's is removed, so it's on by default here; the Marketplace
+# extension keeps it off, as stock VS Code may already have Copilot's.
+if "hupi.agent.enabled" in props:
+    props["hupi.agent.enabled"]["default"] = True
 with open(path, "w") as f:
     json.dump(pkg, f, indent=2)
 PYEOF
