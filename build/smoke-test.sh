@@ -141,6 +141,36 @@ if command -v cygpath >/dev/null 2>&1; then
   RESULT_FILE_FOR_JS="$(cygpath -m "$RESULT_FILE")"
 fi
 
+# A tiny MCP server for the agent-plumbing check below: one read-only
+# tool, stdio JSON-RPC. HUPI Code's own binary runs it as plain Node
+# (ELECTRON_RUN_AS_NODE), so it needs nothing installed on any OS. VS Code
+# starts stdio servers from its extension host, which already runs with
+# that variable set, so the explicit "env" is for clarity, not required.
+MCP_SERVER_JS="$WORKDIR/smoke-mcp-server.js"
+cat > "$MCP_SERVER_JS" <<'JSEOF'
+const rl = require('readline').createInterface({ input: process.stdin });
+const reply = (id, result) => process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id, result }) + '\n');
+rl.on('line', (line) => {
+  if (!line.trim()) return;
+  const m = JSON.parse(line);
+  if (m.id === undefined) return;
+  if (m.method === 'initialize') reply(m.id, { protocolVersion: (m.params && m.params.protocolVersion) || '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'smoke', version: '0' } });
+  else if (m.method === 'tools/list') reply(m.id, { tools: [{ name: 'smoke_echo', description: 'Echo text back.', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, annotations: { readOnlyHint: true } }] });
+  else if (m.method === 'tools/call') reply(m.id, { content: [{ type: 'text', text: 'smoke:' + ((m.params.arguments || {}).text || '') }] });
+  else reply(m.id, {});
+});
+JSEOF
+APP_BIN_FOR_JSON="$APP_BIN"
+MCP_SERVER_JS_FOR_JSON="$MCP_SERVER_JS"
+if command -v cygpath >/dev/null 2>&1; then
+  APP_BIN_FOR_JSON="$(cygpath -m "$APP_BIN")"
+  MCP_SERVER_JS_FOR_JSON="$(cygpath -m "$MCP_SERVER_JS")"
+fi
+mkdir -p "$WORKDIR/user-data/User"
+cat > "$WORKDIR/user-data/User/mcp.json" <<JSONEOF
+{ "servers": { "smoke": { "type": "stdio", "command": "$APP_BIN_FOR_JSON", "args": ["$MCP_SERVER_JS_FOR_JSON"], "env": { "ELECTRON_RUN_AS_NODE": "1" } } } }
+JSONEOF
+
 mkdir -p "$PROBE_DIR"
 cat > "$PROBE_DIR/package.json" <<EOF
 {
@@ -163,7 +193,30 @@ async function activate() {
   const nativeChatViewHidden = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden');
   const defaultAccountStatus = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'defaultAccountStatus');
   const mcpEnabled = vscode.workspace.getConfiguration('hupi').get('mcp.enabled');
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus + '\n' + 'mcpEnabled:' + mcpEnabled);
+  const agentEnabled = vscode.workspace.getConfiguration('hupi').get('agent.enabled');
+  // The HUPI agent's plumbing: start the configured MCP servers the way
+  // the agent does (nothing else starts them here — there's no native chat
+  // view), then the test server's tool must be listed and callable.
+  const race = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r('timeout'), ms))]);
+  const findTool = () => vscode.lm.tools.find((t) => (t.tags || []).includes('mcp') && t.name.endsWith('smoke_echo'));
+  let mcpTool = 'missing';
+  let mcpCall = 'not run';
+  for (let i = 0; i < 6 && !findTool(); i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    await race(vscode.commands.executeCommand('workbench.mcp.startServer', '*', { waitForLiveTools: true }).then(() => 'ok', () => 'error'), 15000);
+  }
+  const tool = findTool();
+  if (tool) {
+    mcpTool = 'listed';
+    try {
+      const res = await race(vscode.lm.invokeTool(tool.name, { input: { text: 'ping' }, toolInvocationToken: undefined }), 15000);
+      const text = res === 'timeout' ? 'timeout' : res.content.map((p) => p.value).join('');
+      mcpCall = text === 'smoke:ping' ? 'ok' : 'unexpected ' + text;
+    } catch (e) {
+      mcpCall = 'error ' + e;
+    }
+  }
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus + '\n' + 'mcpEnabled:' + mcpEnabled + '\n' + 'agentEnabled:' + agentEnabled + '\n' + 'mcpTool:' + mcpTool + '\n' + 'mcpCall:' + mcpCall);
 }
 module.exports = { activate };
 EOF
@@ -189,7 +242,11 @@ echo "==> launching to confirm it starts and loads the HUPI extension"
 # replaces `timeout` for that.
 LAUNCH=("$APP_BIN" --no-sandbox --disable-gpu --user-data-dir="$WORKDIR/user-data")
 case "$(uname -s)" in
-  Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}") ;;
+  # --password-store=basic: a headless Linux runner has no OS keyring, and
+  # without it VS Code shows a modal "OS keyring couldn't be identified"
+  # dialog the first time anything touches secret storage — which starting
+  # an MCP server does, so the agent-plumbing check would hang.
+  Linux*) LAUNCH=(xvfb-run -a "${LAUNCH[@]}" --password-store=basic) ;;
 esac
 
 "${LAUNCH[@]}" > "$WORKDIR/run.log" 2>&1 &
@@ -202,7 +259,8 @@ APP_PID=$!
 # had launched fine. Polling exits as soon as the probe fires (fast on
 # Linux/macOS, which have consistently finished well under 30s) while
 # still giving a slower cold start up to MAX_WAIT_SECS before giving up.
-MAX_WAIT_SECS=90
+# 150, not 90: the probe also starts an MCP server and calls its tool.
+MAX_WAIT_SECS=150
 for _ in $(seq 1 "$MAX_WAIT_SECS"); do
   if [[ -f "$RESULT_FILE" ]]; then
     break
@@ -273,8 +331,27 @@ if grep -qx "mcpEnabled:true" "$RESULT_FILE"; then
   exit 1
 fi
 
+# HUPI's agent is HUPI Code's only agent, so it's on by default here
+# (build.sh); "undefined" means a bundled extension older than 0.1.16.
+if grep -qx "agentEnabled:false" "$RESULT_FILE"; then
+  echo "FAIL: hupi.agent.enabled is false — build.sh's default flip didn't take, so"
+  echo "HUPI Code ships without its agent. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
+if ! grep -qx "mcpTool:listed" "$RESULT_FILE" || ! grep -qx "mcpCall:ok" "$RESULT_FILE"; then
+  echo "FAIL: the HUPI agent's tool plumbing doesn't work: starting MCP servers"
+  echo "(workbench.mcp.startServer) and finding/calling their tools through"
+  echo "vscode.lm.tools / vscode.lm.invokeTool must work without Copilot, or the"
+  echo "agent has no MCP tools. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
 echo "upstream's Copilot Chat Setup is confirmed disabled, the native Chat view"
 echo "is confirmed force-hidden, the Account Menu's Copilot sign-in command is"
 echo "confirmed absent, the default-account/Copilot-entitlement provider is"
-echo "confirmed never registered, and HUPI's MCP server is off by default."
+echo "confirmed never registered, HUPI's MCP server is off by default, the HUPI"
+echo "agent is on, and an MCP server's tool can be started, listed and called."
