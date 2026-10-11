@@ -162,7 +162,8 @@ async function activate() {
   const agenticSignInCommand = commands.includes('workbench.action.agenticSignIn') ? 'present' : 'absent';
   const nativeChatViewHidden = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'hupiNativeChatViewHidden');
   const defaultAccountStatus = await vscode.commands.executeCommand('_hupi.getContextKeyValue', 'defaultAccountStatus');
-  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus);
+  const mcpEnabled = vscode.workspace.getConfiguration('hupi').get('mcp.enabled');
+  fs.writeFileSync('$RESULT_FILE_FOR_JS', ids.join('\n') + '\n---\n' + 'chatSetupCommand:' + chatSetupCommand + '\n' + 'agenticSignInCommand:' + agenticSignInCommand + '\n' + 'nativeChatViewHidden:' + nativeChatViewHidden + '\n' + 'defaultAccountStatus:' + defaultAccountStatus + '\n' + 'mcpEnabled:' + mcpEnabled);
 }
 module.exports = { activate };
 EOF
@@ -261,8 +262,19 @@ if ! grep -qx "defaultAccountStatus:undefined" "$RESULT_FILE"; then
   exit 1
 fi
 
+# hupi.mcp.enabled is only a real setting from extension 0.1.15 on; an
+# older bundled extension reports "undefined", which is fine (it has no
+# MCP server to hide).
+if grep -qx "mcpEnabled:true" "$RESULT_FILE"; then
+  echo "FAIL: hupi.mcp.enabled is true — build.sh's default flip didn't take, so"
+  echo "HUPI's MCP server is offered even though this build has no agent mode to"
+  echo "use it. Full result:"
+  cat "$RESULT_FILE"
+  exit 1
+fi
+
 echo "OK: HUPI Code started, hupi.hupi-vscode is loaded as a built-in extension,"
 echo "upstream's Copilot Chat Setup is confirmed disabled, the native Chat view"
 echo "is confirmed force-hidden, the Account Menu's Copilot sign-in command is"
-echo "confirmed absent, and the default-account/Copilot-entitlement provider is"
-echo "confirmed never registered."
+echo "confirmed absent, the default-account/Copilot-entitlement provider is"
+echo "confirmed never registered, and HUPI's MCP server is off by default."

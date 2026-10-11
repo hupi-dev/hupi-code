@@ -190,6 +190,13 @@ cp -r "$HUPI_EXTENSION_DIR"/dist "$HUPI_EXTENSION_DIR"/package.json \
 # "missing: marked, openai" even though nothing is actually missing at
 # runtime. A pre-bundled built-in extension shouldn't declare
 # dependencies its bundle doesn't need installed separately.
+#
+# Same step also turns hupi.mcp.enabled off by default. The extension
+# (0.1.15+) offers HUPI's MCP server to VS Code's agent mode, but that
+# agent mode comes from Copilot, which this build removes (patches/0004,
+# 0005) — so here nothing would ever call those tools and the server
+# would only clutter MCP: List Servers. A user who adds an MCP-capable
+# chat extension can still turn it back on in Settings.
 $PYTHON - "$BUILTIN_DIR/package.json" <<'PYEOF'
 import json, sys
 path = sys.argv[1]
@@ -197,6 +204,9 @@ with open(path) as f:
     pkg = json.load(f)
 pkg.pop("dependencies", None)
 pkg.pop("devDependencies", None)
+props = pkg.get("contributes", {}).get("configuration", {}).get("properties", {})
+if "hupi.mcp.enabled" in props:
+    props["hupi.mcp.enabled"]["default"] = False
 with open(path, "w") as f:
     json.dump(pkg, f, indent=2)
 PYEOF
