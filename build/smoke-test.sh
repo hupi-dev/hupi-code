@@ -89,8 +89,9 @@
 # through the internal `_workbench.addToRecentlyOpened` command, reads the
 # list back with `_workbench.getRecentlyOpened`, and expects the entry
 # to be filtered out. Without 0010 it reads back as "Agents Window",
-# exactly what the Welcome page's Recent list shows. The patch's
-# `--agents` fallthrough isn't exercised here.
+# exactly what the Welcome page's Recent list shows. 0010 leaves the
+# `--agents` command-line flag working on purpose:
+# smoke-test-window-state.sh needs it to open a real Agents window.
 #
 # patches/0011 (hupiDisableCopilotStatusBarEntry) skips a contribution
 # that adds a status bar entry and nothing else an extension can see, so

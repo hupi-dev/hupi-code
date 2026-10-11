@@ -1762,12 +1762,17 @@ it's set:
   covers the Welcome page's Recent list, File > Open Recent, and the
   Windows jump list, including entries written before this patch or by
   another Code-OSS app that shares `.vscode-oss-shared`.
-- makes `--agents` (first launch in `app.ts`, second instance in
-  `launchMainService.ts`) open a normal window instead.
 
-Left alone on purpose: `src/vs/sessions/` itself (it's only reachable
-through the entry points above) and one accessibility-help sentence
-that mentions the command.
+Left alone on purpose: `src/vs/sessions/` itself, one
+accessibility-help sentence that mentions the command, and the
+`--agents` command-line flag. A first version of 0010 also made
+`--agents` open a normal window instead. CI's linux-x64 job then failed
+in `build/smoke-test-window-state.sh`, 0008's regression test. That
+test opens a real Agents window with `--agents`, closes both windows,
+relaunches, and expects both back. It timed out waiting for
+`sessions.html`. The flag isn't a Welcome-page surface, and an Agents
+window can still come back through window restore (exactly what 0008
+fixes), so the flag stays and 0008's test keeps covering that path.
 
 **`patches/0011-hide-copilot-status-bar-entry.patch`** adds
 `hupiDisableCopilotStatusBarEntry` and skips registering

@@ -95,8 +95,10 @@ surfaces that are new in VS Code 1.137. Both were found on the Welcome
 page of a local build. 0010 (`hupiDisableAgentsWindow`) removes the
 entry points to the new Agents window: the "Try out the new Agents
 window" button, the "Agents Window" entry under Recent, the "Open
-Agents Window" / "Open in Agents" commands and Ctrl+Shift+A, the chat
-tip, and `--agents` on the command line. In this build that window
+Agents Window" / "Open in Agents" commands and Ctrl+Shift+A, and the
+chat tip. `hupi-code --agents` still opens it, because
+`build/smoke-test-window-state.sh` (0008's regression test) depends on
+it. In this build that window
 never gets past its loading screen, because it waits for the
 default-account provider that 0009 turns off. Without 0009 it would
 stop at a "Sign in to use GitHub Copilot" dialog instead. 0011

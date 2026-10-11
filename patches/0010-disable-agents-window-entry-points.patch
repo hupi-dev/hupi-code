@@ -10,43 +10,6 @@ index e1412c23..a84d1720 100644
  	readonly chatParticipantRegistry?: string;
  	readonly chatSessionRecommendations?: IChatSessionRecommendation[];
  	readonly emergencyAlertUrl?: string;
-diff --git a/src/vs/code/electron-main/app.ts b/src/vs/code/electron-main/app.ts
-index c9736ff3..e5325e77 100644
---- a/src/vs/code/electron-main/app.ts
-+++ b/src/vs/code/electron-main/app.ts
-@@ -1487,7 +1487,9 @@ export class CodeApplication extends Disposable {
- 		const args = this.environmentMainService.args;
- 
- 		// Handle agents window first based on context
--		if (args['agents']) {
-+		// HUPI Code patch: with hupiDisableAgentsWindow (patches/0010), `--agents`
-+		// falls through and opens a normal window instead.
-+		if (args['agents'] && !this.productService.hupiDisableAgentsWindow) {
- 			return windowsMainService.openAgentsWindow({
- 				context,
- 				cli: args,
-diff --git a/src/vs/platform/launch/electron-main/launchMainService.ts b/src/vs/platform/launch/electron-main/launchMainService.ts
-index 1984c46f..1d338530 100644
---- a/src/vs/platform/launch/electron-main/launchMainService.ts
-+++ b/src/vs/platform/launch/electron-main/launchMainService.ts
-@@ -13,6 +13,7 @@ import { NativeParsedArgs } from '../../environment/common/argv.js';
- import { isLaunchedFromCli } from '../../environment/node/argvHelper.js';
- import { createDecorator } from '../../instantiation/common/instantiation.js';
- import { ILogService } from '../../log/common/log.js';
-+import product from '../../product/common/product.js';
- import { IURLService } from '../../url/common/url.js';
- import { ICodeWindow } from '../../window/electron-main/window.js';
- import { IWindowSettings } from '../../window/common/window.js';
-@@ -144,7 +145,8 @@ export class LaunchMainService implements ILaunchMainService {
- 		}
- 
- 		// Agents window
--		else if (args['agents']) {
-+		// HUPI Code patch: same `--agents` fallthrough as app.ts (patches/0010).
-+		else if (args['agents'] && !product.hupiDisableAgentsWindow) {
- 			usedWindows = await this.windowsMainService.openAgentsWindow(baseConfig);
- 		}
- 
 diff --git a/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts b/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts
 index 70356b90..28f7ab3e 100644
 --- a/src/vs/platform/workspaces/electron-main/workspacesHistoryMainService.ts
