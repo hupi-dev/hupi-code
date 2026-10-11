@@ -69,7 +69,7 @@ fi
 
 echo "==> launching to render a real screenshot"
 "$APP_BIN" --no-sandbox --disable-gpu --disable-workspace-trust \
-  --user-data-dir="$WORKDIR/user-data" --new-window \
+  --user-data-dir="$WORKDIR/user-data" --shared-data-dir="$WORKDIR/shared-data" --new-window \
   > "$WORKDIR/run.log" 2>&1 &
 APP_PID=$!
 
