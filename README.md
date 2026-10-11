@@ -100,13 +100,22 @@ chrome, not in an extension, so the fix is another core patch, not a
 `product-overlay.json` change. Deferred for now rather than built,
 since it's polish, not a gap anyone's hit yet.
 
-One bundled-extension setting differs from the Marketplace extension.
+Two bundled-extension settings differ from the Marketplace extension.
 Since 0.1.15, the HUPI extension offers HUPI's MCP server to VS Code's
 agent mode. Agent mode comes from Copilot, which this build removes, so
 nothing here would ever call those tools. `build/build.sh` therefore
 ships the built-in with `hupi.mcp.enabled` defaulting to `false`, and
 `build/smoke-test.sh` checks that it stays off. Users who add an
 MCP-capable chat extension can turn it back on in Settings.
+
+The other is `hupi.agent.enabled`, which defaults to `true` here (the
+Marketplace extension leaves it off). HUPI's own agent, in its sidebar
+chat, is this build's only agent, since Copilot's is removed. The smoke
+test checks that the agent is on. It also checks the agent's tool
+plumbing works with no Copilot present: it registers a tiny stdio MCP
+server, starts it with `workbench.mcp.startServer` the way the agent does,
+and finds and calls its tool through `vscode.lm.tools` /
+`vscode.lm.invokeTool`.
 
 Linux, Windows, and macOS (arm64) all build in CI now — see
 [docs/BUILD.md](docs/BUILD.md). The macOS build is now code-signed and
