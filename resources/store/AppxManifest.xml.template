@@ -19,12 +19,26 @@
   from product.nameShort ("HUPI Code"), not applicationName
   ("hupi-code") — confirmed by inspecting that package's actual source
   after a real build's smoke test failed looking for the wrong name.
+
+  FileSystemWriteVirtualization is disabled (with the
+  unvirtualizedResources capability it needs, from Windows 10 1903 — hence
+  MinVersion 10.0.18362.0). By default MSIX silently redirects a packaged
+  app's writes under %APPDATA% into the package's private
+  LocalCache\Roaming copy, and a separate program the app starts may not
+  see them. Extensions do exactly that: write a file to their
+  globalStorage folder, then start a helper program with its path (seen
+  in Store certification: Universal Chat Provider's CLIProxyAPI failed
+  with "The system cannot find the path specified" for the config.yaml
+  the extension had just written). Disabled, AppData behaves as it does
+  for VS Code's own installer: real files in %APPDATA%\HUPI Code, which
+  also means uninstalling leaves them behind, like any installed editor.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  IgnorableNamespaces="uap rescap">
+  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
+  IgnorableNamespaces="uap rescap desktop6">
 
   <Identity
     Name="@@IDENTITY_NAME@@"
@@ -35,10 +49,11 @@
     <DisplayName>HUPI Code</DisplayName>
     <PublisherDisplayName>HUPI Code</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
+    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.22621.0" />
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.18362.0" MaxVersionTested="10.0.22621.0" />
   </Dependencies>
 
   <Resources>
@@ -69,5 +84,6 @@
 
   <Capabilities>
     <rescap:Capability Name="runFullTrust" />
+    <rescap:Capability Name="unvirtualizedResources" />
   </Capabilities>
 </Package>
