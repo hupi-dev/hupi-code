@@ -20,6 +20,16 @@ either, for the same reason).
   FullTrustApplication"` + the `runFullTrust` capability): the
   Microsoft-documented way to package an existing, unmodified Win32 app
   for the Store. `hupi-code.exe` itself needs zero changes.
+- AppData isn't virtualized: the manifest disables
+  `FileSystemWriteVirtualization` and declares the `unvirtualizedResources`
+  restricted capability that requires, which needs Windows 10 1903+
+  (`MinVersion` 10.0.18362.0). With the MSIX default, writes under
+  `%APPDATA%` silently go to the package's private
+  `LocalCache\Roaming` copy, and helper programs that extensions start
+  may not see them. Store certification hit this: Universal Chat
+  Provider's CLIProxyAPI couldn't find the `config.yaml` the extension
+  had just written to its `globalStorage` folder. See "Restricted
+  capability justifications" below for the text Partner Center needs.
 - `resources/store/*.png` — the Store's required tile/logo sizes
   (44/71/150/310 square, 310x150 wide, 50x50 store logo, 620x300 splash),
   generated from the existing HUPI icon.
@@ -45,6 +55,24 @@ either, for the same reason).
    `runFullTrust` is required by the Desktop Bridge packaging pattern
    itself, not something HUPI Code opted into). Was in Certification at
    last check.
+
+## Restricted capability justifications
+
+Partner Center asks why the package needs each restricted capability.
+Paste these into the submission's capability justification field:
+
+- **runFullTrust:** "HUPI Code is a desktop code editor (a fork of VS
+  Code) packaged with the Desktop Bridge pattern; runFullTrust is required
+  for any packaged Win32 desktop app."
+- **unvirtualizedResources:** "HUPI Code is a code editor that runs
+  extensions, and extensions start helper programs (language servers,
+  local proxies, CLIs) that read files the extension wrote to the
+  editor's data folder in AppData. With AppData write virtualization
+  those writes land in the package's private copy, which the helper
+  programs don't see, so the extension fails. Disabling
+  FileSystemWriteVirtualization keeps the editor's data in its normal
+  AppData location, as it is for the same editor installed outside the
+  Store."
 
 ## Building the package
 
