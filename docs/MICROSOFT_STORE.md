@@ -20,15 +20,18 @@ either, for the same reason).
   FullTrustApplication"` + the `runFullTrust` capability): the
   Microsoft-documented way to package an existing, unmodified Win32 app
   for the Store. `hupi-code.exe` itself needs zero changes.
-- AppData isn't virtualized: the manifest disables
-  `FileSystemWriteVirtualization` and declares the `unvirtualizedResources`
-  restricted capability that requires, which needs Windows 10 1903+
-  (`MinVersion` 10.0.18362.0). With the MSIX default, writes under
-  `%APPDATA%` silently go to the package's private
-  `LocalCache\Roaming` copy, and helper programs that extensions start
-  may not see them. Store certification hit this: Universal Chat
-  Provider's CLIProxyAPI couldn't find the `config.yaml` the extension
-  had just written to its `globalStorage` folder. See "Restricted
+- AppData write virtualization is kept, except for HUPI Code's own data
+  folder, `%APPDATA%\HUPI Code`. The manifest excludes just that folder
+  (Windows 11 flexible virtualization, `ExcludedDirectory`), which needs
+  the `unvirtualizedResources` restricted capability and Windows 10 1903+
+  (`MinVersion` 10.0.18362.0). With the MSIX default, writes there
+  silently go to the package's private `LocalCache\Roaming` copy, and
+  helper programs that extensions start may not see them. Store
+  certification hit this: Universal Chat Provider's CLIProxyAPI couldn't
+  find the `config.yaml` the extension had just written to its
+  `globalStorage` folder. The first fix (hupi-code#12) disabled AppData
+  virtualization altogether, and Partner Center denied the capability for
+  that, asking for a specific `ExcludedDirectory` instead. See "Restricted
   capability justifications" below for the text Partner Center needs.
 - `resources/store/*.png` — the Store's required tile/logo sizes
   (44/71/150/310 square, 310x150 wide, 50x50 store logo, 620x300 splash),
@@ -64,15 +67,32 @@ Paste these into the submission's capability justification field:
 - **runFullTrust:** "HUPI Code is a desktop code editor (a fork of VS
   Code) packaged with the Desktop Bridge pattern; runFullTrust is required
   for any packaged Win32 desktop app."
-- **unvirtualizedResources:** "HUPI Code is a code editor that runs
-  extensions, and extensions start helper programs (language servers,
-  local proxies, CLIs) that read files the extension wrote to the
-  editor's data folder in AppData. With AppData write virtualization
-  those writes land in the package's private copy, which the helper
-  programs don't see, so the extension fails. Disabling
-  FileSystemWriteVirtualization keeps the editor's data in its normal
-  AppData location, as it is for the same editor installed outside the
-  Store."
+- **unvirtualizedResources:** the reviewer's questions after the first
+  request was denied, answered in order. Fill in the account type before
+  pasting:
+
+  ```text
+  Account type: [Individual / Company]
+
+  Why: HUPI Code is a code editor (a fork of VS Code). Its extensions write files to their storage folder inside HUPI Code's data folder and then start helper programs (language servers, local proxies, CLIs) that read those files by path. With AppData write virtualization, those writes land in the package's private LocalCache copy, which the helper programs don't see, and the extension fails. This is the error Store certification reported: the Universal Chat Provider extension's CLIProxyAPI helper could not read the config.yaml the extension had just written to %APPDATA%\HUPI Code\User\globalStorage\maxdewald.universal-chat-provider\.
+
+  1. Exact directory: only %APPDATA%\HUPI Code (declared as $(KnownFolder:RoamingAppData)\HUPI Code). Nothing under %LOCALAPPDATA% or %USERPROFILE%\AppData\LocalLow is excluded.
+  2. HUPI Code-owned data only: that folder is HUPI Code's own user-data directory (settings, extension storage, logs and caches). HUPI Code creates it and nothing else uses it. All other AppData writes stay virtualized.
+  3. Registry: no registry location is excluded and RegistryWriteVirtualization is not changed, so any HKCU writes stay in the package's private hive. HUPI Code makes no HKLM writes.
+  4. No Windows or system-directory writes: the exclusion applies only to the folder above, and HUPI Code does not write to the Windows, Program Files or other system directories.
+  5. No third-party application data: the exclusion covers only HUPI Code's own folder. Other applications' AppData folders keep normal MSIX virtualization, and the exclusion does not widen what HUPI Code or its extensions can access; it only changes where writes to that one folder are stored.
+  6. Declaration (Windows 11 flexible virtualization, a specific ExcludedDirectory rather than disabling file system write virtualization):
+     <virtualization:FileSystemWriteVirtualization>
+       <virtualization:ExcludedDirectories>
+         <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\HUPI Code</virtualization:ExcludedDirectory>
+       </virtualization:ExcludedDirectories>
+     </virtualization:FileSystemWriteVirtualization>
+     No pre-Windows 11 declaration (desktop6:FileSystemWriteVirtualization) is included, so on Windows 10 AppData stays fully virtualized.
+  7. Persistence and uninstall: %APPDATA%\HUPI Code (settings, extension storage, logs, caches) remains after uninstall, as it does for the same editor installed outside the Store, so a reinstall keeps the user's settings. To remove it, the user deletes the %APPDATA%\HUPI Code folder (type %APPDATA% in File Explorer's address bar). Installed extensions live in %USERPROFILE%\.hupi-code, outside AppData, and can be removed the same way.
+  8. Assurance: HUPI Code uses unvirtualizedResources only for the scenario described here: keeping its own data folder, %APPDATA%\HUPI Code, visible to the helper processes its extensions start.
+
+  Tested on Windows 11 (build 26100): with this declaration, the extension's helper process starts and reads its config; HUPI Code's data is in %APPDATA%\HUPI Code; and the package's private LocalCache holds only virtualized Windows folders, none of HUPI Code's data.
+  ```
 
 ## Building the package
 

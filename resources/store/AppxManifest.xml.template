@@ -20,25 +20,27 @@
   ("hupi-code") — confirmed by inspecting that package's actual source
   after a real build's smoke test failed looking for the wrong name.
 
-  FileSystemWriteVirtualization is disabled (with the
-  unvirtualizedResources capability it needs, from Windows 10 1903 — hence
-  MinVersion 10.0.18362.0). By default MSIX silently redirects a packaged
-  app's writes under %APPDATA% into the package's private
+  AppData write virtualization is kept, except for one folder: HUPI
+  Code's own data folder, %APPDATA%\HUPI Code (Windows 11 flexible
+  virtualization; it needs the unvirtualizedResources capability, from
+  Windows 10 1903 — hence MinVersion 10.0.18362.0). With MSIX's default,
+  a packaged app's writes there silently land in the package's private
   LocalCache\Roaming copy, and a separate program the app starts may not
   see them. Extensions do exactly that: write a file to their
-  globalStorage folder, then start a helper program with its path (seen
-  in Store certification: Universal Chat Provider's CLIProxyAPI failed
-  with "The system cannot find the path specified" for the config.yaml
-  the extension had just written). Disabled, AppData behaves as it does
-  for VS Code's own installer: real files in %APPDATA%\HUPI Code, which
-  also means uninstalling leaves them behind, like any installed editor.
+  globalStorage folder (inside %APPDATA%\HUPI Code\User), then start a
+  helper program with its path (seen in Store certification: Universal
+  Chat Provider's CLIProxyAPI failed with "The system cannot find the
+  path specified" for the config.yaml the extension had just written).
+  Everything else under AppData, and all registry writes, stay
+  virtualized. Windows 10 ignores the exclusion and virtualizes as before.
+  See docs/MICROSOFT_STORE.md for the capability justification.
 -->
 <Package
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-  xmlns:desktop6="http://schemas.microsoft.com/appx/manifest/desktop/windows10/6"
-  IgnorableNamespaces="uap rescap desktop6">
+  xmlns:virtualization="http://schemas.microsoft.com/appx/manifest/virtualization/windows10"
+  IgnorableNamespaces="uap rescap virtualization">
 
   <Identity
     Name="@@IDENTITY_NAME@@"
@@ -49,7 +51,11 @@
     <DisplayName>HUPI Code</DisplayName>
     <PublisherDisplayName>HUPI Code</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
-    <desktop6:FileSystemWriteVirtualization>disabled</desktop6:FileSystemWriteVirtualization>
+    <virtualization:FileSystemWriteVirtualization>
+      <virtualization:ExcludedDirectories>
+        <virtualization:ExcludedDirectory>$(KnownFolder:RoamingAppData)\HUPI Code</virtualization:ExcludedDirectory>
+      </virtualization:ExcludedDirectories>
+    </virtualization:FileSystemWriteVirtualization>
   </Properties>
 
   <Dependencies>
